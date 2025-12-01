@@ -1,0 +1,12 @@
+<launch>
+
+  <!-- Path to YAML containing target points -->
+  <param name="targets_yaml"
+         value="$(find visual_based_planning)/config/targets.yaml"/>
+
+  <node pkg="visual_based_planning"
+        type="visual_ik_client"
+        name="visual_ik_client"
+        output="screen"/>
+
+</launch>

@@ -1,0 +1,5 @@
+VisibilityTask task
+string planner_type # "VisRRT" or "VisPRM"
+---
+bool success
+trajectory_msgs/JointTrajectory trajectory

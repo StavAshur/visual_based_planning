@@ -1,0 +1,5 @@
+geometry_msgs/Point[] target_points   # Input: list of 3D points
+---
+geometry_msgs/Pose best_pose          # Output: a valid IK pose
+bool success                          # True if a valid pose was found
+string message                        # Debug info
