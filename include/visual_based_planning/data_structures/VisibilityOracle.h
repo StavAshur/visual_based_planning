@@ -30,27 +30,6 @@ public:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 // #include <vector>
 // #include <functional>
 // #include <Eigen/Core>

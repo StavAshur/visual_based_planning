@@ -67,6 +67,7 @@ find_package(catkin REQUIRED COMPONENTS
   moveit_ros_planning
   moveit_ros_planning_interface
   eigen_conversions
+  angles
 )
 
 find_package(yaml-cpp REQUIRED)
