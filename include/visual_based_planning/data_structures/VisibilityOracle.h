@@ -1,188 +1,251 @@
 #pragma once
+
 #include <vector>
+#include <string>
+#include <stdexcept>
+#include <cmath>
+#include <algorithm>
+#include <functional>
+#include <random>
+
+// Eigen for 3D Math
+#include <Eigen/Geometry>
+#include <Eigen/Dense>
+
+// Boost Geometry for robust geometric types
 #include <boost/geometry.hpp>
-#include <boost/geometry/index/rtree.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/geometries/box.hpp>
+#include <boost/geometry/geometries/segment.hpp>
 
 namespace bg = boost::geometry;
-namespace bgi = boost::geometry::index;
 
+// Define Types to match framework
 typedef bg::model::point<double, 3, bg::cs::cartesian> Point3D;
 typedef bg::model::box<Point3D> Box3D;
 typedef bg::model::segment<Point3D> Segment3D;
-typedef std::pair<Box3D, unsigned int> Value; // Box + ID
 
 class VisibilityOracle {
-    bgi::rtree< Value, bgi::quadratic<16> > rtree;
+public:
+    // 1. Tool Parameters Struct
+    struct VisibilityToolParams {
+        double beam_angle;  // Half-angle in radians (cutoff from Z-axis)
+        double beam_length; // Max range in meters
+    };
+
+    // 2. Visibility Method Enum
+    enum class VisibilityMethod {
+        BF,     // Brute Force
+        GPUBF,  // GPU Brute Force (Future)
+        KDTree  // KD-Tree (Future)
+    };
+
+private:
+    // Storage for Brute Force
+    std::vector<Box3D> obstacles_;
+
+    // Beam Visibility Members
+    VisibilityToolParams tool_params_;
+    VisibilityMethod method_; // Current method selection
+    int num_samples_ = 100;
+    std::function<Eigen::Isometry3d(const std::vector<double>&)> fk_solver_;
+    std::mt19937 rng_; // Random number generator
 
 public:
+    VisibilityOracle() : rng_(std::random_device{}()), method_(VisibilityMethod::BF) {
+        // Default params
+        tool_params_ = {M_PI / 4.0, 1.0}; // 45 deg half-angle, 1m length
+    }
+    ~VisibilityOracle() = default;
+
+    /**
+     * @brief Adds an AABB obstacle to the oracle.
+     */
     void addObstacle(double min_x, double min_y, double min_z, double max_x, double max_y, double max_z, int id) {
         Box3D b(Point3D(min_x, min_y, min_z), Point3D(max_x, max_y, max_z));
-        rtree.insert(std::make_pair(b, id));
+        obstacles_.push_back(b);
     }
 
+    // --- Configuration Setters ---
+
+    void setToolParams(double beam_angle_rad, double beam_length_m) {
+        tool_params_.beam_angle = beam_angle_rad;
+        tool_params_.beam_length = beam_length_m;
+    }
+
+    void setNumSamples(int n) {
+        num_samples_ = n;
+    }
+
+    void setFKSolver(std::function<Eigen::Isometry3d(const std::vector<double>&)> solver) {
+        fk_solver_ = solver;
+    }
+
+    void setMethod(VisibilityMethod method) {
+        method_ = method;
+    }
+
+    VisibilityMethod getMethod() const {
+        return method_;
+    }
+
+    // --- Beam Visibility API ---
+
+    /**
+     * @brief Public wrapper to check if a point is illuminated by the tool.
+     */
+    bool checkPointBeamVisibility(const std::vector<double>& joints, const std::vector<double>& point) {
+        Eigen::Vector3d target(point[0], point[1], point[2]);
+        return isPointInBeam(joints, target);
+    }
+
+    /**
+     * @brief Checks what fraction of a ball is illuminated by the beam (Pose Variant).
+     * @param sensor_pose The pose of the sensor/tool
+     * @param center_vec Ball center (x,y,z)
+     * @param radius Ball radius
+     * @return double Fraction [0.0, 1.0]
+     */
+    double checkBallBeamVisibility(const Eigen::Isometry3d& sensor_pose, const std::vector<double>& center_vec, double radius) {
+        Eigen::Vector3d center(center_vec[0], center_vec[1], center_vec[2]);
+
+        int visible_count = 0;
+        std::uniform_real_distribution<double> dist(-1.0, 1.0);
+
+        for (int i = 0; i < num_samples_; ++i) {
+            // Generate random point in unit sphere using rejection sampling
+            Eigen::Vector3d offset;
+            do {
+                offset = Eigen::Vector3d(dist(rng_), dist(rng_), dist(rng_));
+            } while (offset.squaredNorm() > 1.0);
+
+            // Scale and shift
+            Eigen::Vector3d sample = center + (offset * radius);
+
+            // Check visibility using the Pose overload
+            if (isPointInBeam(sensor_pose, sample)) {
+                visible_count++;
+            }
+        }
+
+        return static_cast<double>(visible_count) / num_samples_;
+    }
+
+    /**
+     * @brief Checks what fraction of a ball is illuminated by the beam (Joint Space Variant).
+     * @param joints Robot configuration
+     * @param center_vec Ball center (x,y,z)
+     * @param radius Ball radius
+     * @return double Fraction [0.0, 1.0]
+     */
+    double checkBallBeamVisibility(const std::vector<double>& joints, const std::vector<double>& center_vec, double radius) {
+        if (!fk_solver_) {
+            throw std::runtime_error("VisibilityOracle: FK Solver not set.");
+        }
+        // Calculate Pose
+        Eigen::Isometry3d pose = fk_solver_(joints);
+        
+        // Delegate to Pose variant
+        return checkBallBeamVisibility(pose, center_vec, radius);
+    }
+
+    /**
+     * @brief Checks if the segment between p1 and p2 is visible (not blocked).
+     * Uses the method selected via setMethod() (Default: BF).
+     */
     bool checkVisibility(const std::vector<double>& p1, const std::vector<double>& p2) {
-        // Create segment and query intersection
-        // Stub: return true if visible
-        return true;
+        
+        // Convert input vectors to Boost Segment
+        Point3D pt1(p1[0], p1[1], p1[2]);
+        Point3D pt2(p2[0], p2[1], p2[2]);
+        Segment3D segment(pt1, pt2);
+
+        switch (method_) {
+            case VisibilityMethod::BF:
+                return checkVisibilityBF(segment);
+            case VisibilityMethod::GPUBF:
+                return checkVisibilityGPUBF(segment);
+            case VisibilityMethod::KDTree:
+                return checkVisibilityKDTree(segment);
+            default:
+                throw std::runtime_error("Unknown visibility check method.");
+        }
+    }
+
+    /**
+     * @brief Eigen overload for checkVisibility
+     */
+    bool checkVisibility(const Eigen::Vector3d& p1, const Eigen::Vector3d& p2) {
+        std::vector<double> v1 = {p1.x(), p1.y(), p1.z()};
+        std::vector<double> v2 = {p2.x(), p2.y(), p2.z()};
+        return checkVisibility(v1, v2);
+    }
+
+private:
+    // ==============================================================================
+    // Beam Logic (Private)
+    // ==============================================================================
+
+    // 2. Base function: Checks if point is in beam given the sensor pose
+    bool isPointInBeam(const Eigen::Isometry3d& sensor_pose, const Eigen::Vector3d& target) {
+        // Transform target to Sensor Frame
+        Eigen::Vector3d local_target = sensor_pose.inverse() * target;
+
+        // 1. Check Range (Depth)
+        // Assuming beam emanates along +Z axis
+        if (local_target.z() < 0.0 || local_target.z() > tool_params_.beam_length) {
+            return false;
+        }
+
+        // 2. Check Angle (Cone)
+        // Vector from origin to point is just local_target.
+        // The angle theta is between local_target and Z-axis (0,0,1).
+        // cos(theta) = (v . z) / (|v| * |z|) = local_target.z() / local_target.norm()
+        
+        double dist = local_target.norm();
+        if (dist < 1e-6) return true; // Point is at the sensor origin
+
+        double cos_theta = local_target.z() / dist;
+        double cos_beam = std::cos(tool_params_.beam_angle);
+
+        // Within cone if cos_theta >= cos_beam (since angle is smaller)
+        // AND check for occlusion
+        Eigen::Vector3d tool_position = sensor_pose.translation();
+        return cos_theta >= cos_beam && checkVisibility(tool_position, target);
+    }
+
+    // Overload: Calculates FK then calls base function
+    bool isPointInBeam(const std::vector<double>& joints, const Eigen::Vector3d& target) {
+        if (!fk_solver_) {
+            throw std::runtime_error("VisibilityOracle: FK Solver not set.");
+        }
+        Eigen::Isometry3d pose = fk_solver_(joints);
+        return isPointInBeam(pose, target);
+    }
+
+    // ==============================================================================
+    // 1. Brute Force Implementation
+    // ==============================================================================
+    bool checkVisibilityBF(const Segment3D& segment) {
+        // Boost Geometry provides a robust 'intersects' function that handles
+        // the Slab logic / separating axis theorem internally and efficiently.
+        
+        for (const auto& box : obstacles_) {
+            if (bg::intersects(segment, box)) {
+                return false; // Blocked
+            }
+        }
+        return true; // Visible
+    }
+
+    // ==============================================================================
+    // 2. Unimplemented Placeholders (As requested)
+    // ==============================================================================
+    bool checkVisibilityGPUBF(const Segment3D& segment) {
+        throw std::runtime_error("GPUBF visibility check is not implemented.");
+    }
+
+    bool checkVisibilityKDTree(const Segment3D& segment) {
+        throw std::runtime_error("KDTree visibility check is not implemented.");
     }
 };
-
-
-
-
-// #include <vector>
-// #include <functional>
-// #include <Eigen/Core>
-// #include <vector>
-// #include <stdio.h>
-// #include <algorithm> 
-// #include <cmath> 
-// #include <Eigen/Geometry>
-
-
-// typedef Eigen::AlignedBox<double,3> AABB;
-// typedef Eigen::Vector3d Vector3d;
-
-
-// class VisibilityOracle {
-
-//     public:
-
-//         // struct Ray {
-//         //     Vector3d origin;
-//         //     Vector3d dir;     // Must be normalized
-//         //     float t_max;  // Max distance usually
-//         // };
-
-//         struct Segment {
-//             Vector3d a;
-//             Vector3d b;    
-//         };
-
-//         VisibilityOracle() = default;
-//         virtual ~VisibilityOracle() = default;
-
-//         VisibilityOracle(std::vector<AABB>& boxes) {
-//             printf("built a visibility oracle for AABBs");
-//         }
-
-//         std::vector<AABB> boxes_;
-
-
-//             // Public interface to check visibility based on the selected method
-//         bool IsVisible(const Segment& segment, std::string method = "BF")
-//         {
-//             if (method == "BF") {
-//                 return BruteForceVisibilityCheck(segment);
-//             } else if (method == "GPUBF") {
-//                 return GPUBFVisibilityCheck(segment);
-//             } else if (method == "KDTree") {
-//                 return KDTreeVisibilityCheck(segment);
-//             } else {
-//                 throw std::runtime_error("Unknown visibility check method: " + method);
-//             }
-//         }
-
-
-
-//     private:
-
-//         bool SegmentAABBIntersection(const Segment& segment, const AABB& box)
-//         {
-//             // Direction vector of the segment
-//             Vector3d dir = segment.b - segment.a;
-
-//             // The segment is defined parametrically as P(t) = a + t * dir
-//             // Since it is a finite segment, valid intersection must occur within t = [0, 1]
-//             double tmin = 0.0;
-//             double tmax = 1.0;
-
-//             // Iterate over the 3 axes (X, Y, Z)
-//             for (int i = 0; i < 3; ++i) {
-//                 // Calculate the inverse direction to replace division with multiplication
-//                 // Note: If dir[i] is 0, this results in +/- infinity. 
-//                 // IEEE 754 floating point logic handles comparisons with infinity correctly 
-//                 // for the min/max logic below, assuming the segment isn't exactly on the slab boundary.
-//                 double invDir = 1.0 / dir[i];
-
-//                 // Calculate intersection t-values for the near and far planes of the slab
-//                 double t1 = (box.min()[i] - segment.a[i]) * invDir;
-//                 double t2 = (box.max()[i] - segment.a[i]) * invDir;
-
-//                 // Ensure t1 is the entry point (smaller) and t2 is the exit point (larger)
-//                 if (t1 > t2) {
-//                     std::swap(t1, t2);
-//                 }
-
-//                 // Narrow the intersection interval based on the current slab
-//                 tmin = std::max(tmin, t1);
-//                 tmax = std::min(tmax, t2);
-
-//                 if (tmin > tmax) {
-//                     return false;
-//                 }
-//             }
-
-//             return true;
-//         }
-
-
-//         // Returns true if the segment is NOT blocked by any AABB in the list
-//         bool BruteForceVisibilityCheck(const Segment& segment)
-//         {
-//             // Precompute direction and inverse direction for the segment
-//             // Optimization: Calculate this once instead of for every box
-//             Vector3d dir = segment.b - segment.a;
-//             Vector3d invDir;
-//             for (int i = 0; i < 3; ++i) {
-//                 invDir[i] = 1.0 / dir[i];
-//             }
-
-//             for (const auto& box : boxes_) {
-//                 // Segment parameter range is always [0, 1]
-//                 double tmin = 0.0;
-//                 double tmax = 1.0;
-
-//                 bool hit = true;
-//                 // Check intersection with the current box using the Slab Method
-//                 for (int i = 0; i < 3; ++i) {
-//                     double t1 = (box.min()[i] - segment.a[i]) * invDir[i];
-//                     double t2 = (box.max()[i] - segment.a[i]) * invDir[i];
-
-//                     if (t1 > t2) {
-//                         std::swap(t1, t2);
-//                     }
-
-//                     tmin = std::max(tmin, t1);
-//                     tmax = std::min(tmax, t2);
-
-//                     if (tmin > tmax) {
-//                         hit = false;
-//                         break;
-//                     }
-//                 }
-
-//                 if (hit) {
-//                     return false; // Blocked by this box
-//                 }
-//             }
-
-//             return true; // Not blocked by any box (Visible)
-//         }
-
-//         // Throws an error as it is not implemented yet
-//         bool GPUBFVisibilityCheck(const Segment& segment)
-//         {
-//             throw std::runtime_error("GPUBF unimplemented");
-//         }
-
-//         // Throws an error as it is not implemented yet
-//         bool KDTreeVisibilityCheck(const Segment& segment)
-//         {
-//             throw std::runtime_error("KDTree unimplemented");
-//         }
-
-// };
-
-
-// // #endif
