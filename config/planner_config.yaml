@@ -1,0 +1,24 @@
+planner:
+  mode: "VisRRT" # "VisRRT" or "VisPRM"
+  use_visual_ik: false
+  
+  # Planning Group & Links
+  group_name: "manipulator"
+  ee_link_name: "tool0"
+  
+  # General Settings
+  resolution: 0.05
+  visibility_threshold: 0.8
+
+  # RRT Specific Parameters
+  rrt:
+    goal_bias: 0.05
+    max_extension: 0.1
+    max_iterations: 5000
+
+  # PRM Specific Parameters
+  prm:
+    num_neighbors: 10
+    num_samples: 1000
+    # 0 = LINEAR, 1 = BINARY_SEARCH
+    edge_validation_method: 1

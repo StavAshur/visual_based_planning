@@ -8,11 +8,14 @@
 #include <geometry_msgs/Point.h>
 
 #include "ValidityChecker.h"
+#include "../common/Types.h"
+namespace visual_planner {
 
 class VisualIK {
 
 
 public:
+
     /**
      * @brief Constructor
      */
@@ -25,6 +28,20 @@ public:
         robot_state_.reset(new moveit::core::RobotState(robot_model_));
     }
 
+
+    /**
+     * @brief Standard IK solver with collision checking.
+     * Solves for the exact pose provided without any visual-based local search.
+     * @param pose The exact 6D pose (Position + Orientation) to solve for.
+     * @param seed_joints Initial guess for the solver.
+     * @param solution_out [Output] The valid joint configuration.
+     */
+    bool solveIK(const Eigen::Isometry3d& pose, const std::vector<double>& seed_joints, std::vector<double>& solution_out) {
+        robot_state_->setJointGroupPositions(group_name_, seed_joints);
+        return checkIK(pose, solution_out);
+    }
+
+
     // =========================================================================================
     // 1. Core Logic: Solve IK for a Specific Orientation
     // =========================================================================================
@@ -36,71 +53,55 @@ public:
      * @param target_points The points to observe.
      * @param orientation The desired orientation (Rotation Matrix) of the camera.
      * @param solution_out [Output] Resulting joints.
-     * @param standoff_dist Distance from centroid to place camera.
+     */
+    /**
+     * @brief Finds a solution that looks at the MES center with the given orientation.
+     * Standoff distance is derived from the current robot position relative to the target.
      */
     bool solveVisualIK(const std::vector<double>& current_joints,
-                                const std::vector<geometry_msgs::Point>& target_points,
-                                const Eigen::Matrix3d& orientation,
-                                std::vector<double>& solution_out,
-                                double standoff_dist = 0.5) 
+                       const Ball& target_mes,
+                       const Eigen::Matrix3d& orientation,
+                       std::vector<double>& solution_out) 
     {
-        if (target_points.empty()) return false;
+        // 1. Update Robot State to get current position for Standoff Calculation
+        robot_state_->setJointGroupPositions(group_name_, current_joints);
+        robot_state_->update();
+        Eigen::Vector3d current_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
 
-        // 1. Calculate Centroid of Targets
-        Eigen::Vector3d c(0, 0, 0);
-        for (const auto& p : target_points) {
-            Eigen::Vector3d curr_pt(p.x, p.y, p.z);
-            c += curr_pt;
-        }
-        c /= target_points.size();
+        // 2. Calculate Standoff Distance (Preserve current distance)
+        double standoff_dist = (current_pos - target_mes.center).norm();
 
-        double r = 0.0;
-        for (const auto& p : target_points)
-        {
-            Eigen::Vector3d curr_pt(p.x, p.y, p.z);
-            double d = (curr_pt - c).norm();
-            if (d > r) r = d;
-        }
-
-        Eigen::Vector3d p_current = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
-        
         // B. Calculate Position based on Orientation
         // We assume the camera looks down its local +Z axis.
-        // Therefore, the "viewing direction" in World frame the z-column of the orientation.
-        Eigen::Vector3d v = orientation.col(2);
+        Eigen::Vector3d z_axis_local(0, 0, 1);
+        Eigen::Vector3d viewing_direction = orientation * z_axis_local;
 
-        // Compute valid segment [a, b] along v
-        Eigen::Vector3d a = c - (h - r) * v;
-        Eigen::Vector3d b = c - (r / std::tan(theta / 2.0)) * v;
-        double seg_length = (b - a).norm();
-
-        Eigen::Vector3d ab = b - a;
-        double t_param = ab.dot(p_current - a) / ab.squaredNorm();
-
-        // clamping
-        t_param = (t_param < 0.0) ? 0.0 : t_param;
-        t_param = (t_param > 1.0) ? 1.0 : t_param;
-
-        Eigen::Vector3d p_prime = a + t_param * ab;
-
-        Eigen::Vector3d dir = ab.normalized();
-        double step_size = seg_length / (2.0 * num_steps);
+        // Position = Center - (ForwardVector * distance)
+        Eigen::Vector3d desired_pos = target_mes.center - (viewing_direction.normalized() * standoff_dist);
 
         // C. Construct Full Pose
-        Eigen::Isometry3d test_pose = Eigen::Isometry3d::Identity();
-        test_pose.translation() = p_prime;
-        test_pose.linear() = orientation;
+        Eigen::Isometry3d desired_pose = Eigen::Isometry3d::Identity();
+        desired_pose.translation() = desired_pos;
+        desired_pose.linear() = orientation;
 
+        // D. Solve IK with Local Search
+        
+        // 1. Try ideal position
+        // Note: robot_state_ is already set to current_joints from Step 1
+        if (checkIK(desired_pose, solution_out)) return true;
 
-        robot_state_->setJointGroupPositions(group_name_, current_joints); // Set seed
-        if (checkIK(test_pose, solution_out)) return true;
+        // 2. Search surroundings along the viewing axis
+        Eigen::Vector3d dir = viewing_direction.normalized(); 
+        Eigen::Vector3d p_prime = desired_pos;
+        Eigen::Isometry3d test_pose = desired_pose;
+        
+        double step_size = 0.05; // 5 cm steps
+        size_t num_steps = 10;   // Search up to 50cm in each direction
 
-        // D. Solve IK
         for (size_t i = 1; i <= num_steps; i++) {
             // Step in +dir (Closer to target)
             Eigen::Vector3d p_plus = p_prime + (i * step_size * dir);
             test_pose.translation() = p_plus;
-            // Reset seed to ensure we search near the current robot config
             robot_state_->setJointGroupPositions(group_name_, current_joints); 
             if (checkIK(test_pose, solution_out)) return true;
 
@@ -114,6 +115,30 @@ public:
         return false;
     }
 
+    /**
+     * @brief Wrapper: overload that takes vector of points, computes centroid, and calls MES version.
+     */
+    bool solveVisualIK(const std::vector<double>& current_joints,
+                       const std::vector<geometry_msgs::Point>& target_points,
+                       const Eigen::Matrix3d& orientation,
+                       std::vector<double>& solution_out)
+    {
+        if (target_points.empty()) return false;
+
+        // Calculate Centroid
+        Eigen::Vector3d centroid(0, 0, 0);
+        for (const auto& p : target_points) {
+            centroid += Eigen::Vector3d(p.x, p.y, p.z);
+        }
+        centroid /= target_points.size();
+
+        Ball mes;
+        mes.center = centroid;
+        mes.radius = 0; // Not used for look-at calculation
+
+        return solveVisualIK(current_joints, mes, orientation, solution_out);
+    }
+
     // =========================================================================================
     // 2. Wrapper: Maintain Current Orientation
     // =========================================================================================
@@ -124,8 +149,7 @@ public:
      */
     bool maintainOrientationVisualIK(const std::vector<double>& current_joints,
                                            const std::vector<geometry_msgs::Point>& target_points,
-                                           std::vector<double>& solution_out,
-                                           double standoff_dist = 0.5)
+                                           std::vector<double>& solution_out)
     {
         // 1. Update Robot State
         robot_state_->setJointGroupPositions(group_name_, current_joints);
@@ -136,7 +160,7 @@ public:
         Eigen::Matrix3d current_orientation = current_pose.linear();
 
         // 3. Delegate to Core Function
-        return solveVisualIK(current_joints, target_points, current_orientation, solution_out, standoff_dist);
+        return solveVisualIK(current_joints, target_points, current_orientation, solution_out);
     }
 
     // =========================================================================================
@@ -149,8 +173,7 @@ public:
      */
     bool greedyOrientationVisualIK(const std::vector<double>& current_joints,
                             const std::vector<geometry_msgs::Point>& target_points,
-                            std::vector<double>& solution_out,
-                            double standoff_dist = 0.5) 
+                            std::vector<double>& solution_out) 
     {
         if (target_points.empty()) return false;
 
@@ -191,7 +214,7 @@ public:
         look_at_rotation.col(2) = z_axis;
 
         // 3. Delegate to Core Function using the calculated rotation
-        return solveVisualIK(current_joints, target_points, look_at_rotation, solution_out, standoff_dist);
+        return solveVisualIK(current_joints, target_points, look_at_rotation, solution_out);
     }
 
 
@@ -234,3 +257,5 @@ private:
         return false;
     }
 };
+
+}// namespace visual_planner

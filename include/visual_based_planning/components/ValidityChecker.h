@@ -8,11 +8,10 @@
 #include <angles/angles.h>
 #include <moveit/planning_scene/planning_scene.h>
 #include <moveit/robot_state/robot_state.h>
+#include "../common/Types.h"
 
-enum class EdgeCheckMode {
-    LINEAR,
-    BINARY_SEARCH
-};
+
+
 
 class ValidityChecker {
 private:
@@ -72,13 +71,13 @@ public:
     /**
      * @brief Validates the path segment between two configurations.
      */
-    bool validateEdge(const std::vector<double>& start, const std::vector<double>& end, EdgeCheckMode mode = EdgeCheckMode::BINARY_SEARCH) {
+    bool validateEdge(const std::vector<double>& start, const std::vector<double>& end, visual_planner::EdgeCheckMode mode = visual_planner::EdgeCheckMode::BINARY_SEARCH) {
         if (!isValid(start) || !isValid(end)) return false;
 
         double dist = distance(start, end);
         if (dist < 1e-6) return true;
 
-        if (mode == EdgeCheckMode::LINEAR) {
+        if (mode == visual_planner::EdgeCheckMode::LINEAR) {
             return validateEdgeLinear(start, end, dist);
         } else {
             return validateEdgeRecursive(start, end, dist);

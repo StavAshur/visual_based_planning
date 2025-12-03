@@ -93,21 +93,42 @@ public:
 
     /**
      * @brief Public wrapper to check if a point is illuminated by the tool.
+     * 1. Single Point (Joints)
      */
     bool checkPointBeamVisibility(const std::vector<double>& joints, const std::vector<double>& point) {
         Eigen::Vector3d target(point[0], point[1], point[2]);
         return isPointInBeam(joints, target);
     }
+    
+
+    // 2. Single Point (Pose) - Helper for external samplers
+    bool checkPointBeamVisibility(const Eigen::Isometry3d& sensor_pose, const Eigen::Vector3d& point) {
+        return isPointInBeam(sensor_pose, point);
+    }
+
+    // 3. Point Set / Distribution (Pose) - Returns fraction visible [0..1]
+    double checkVisibleFraction(const Eigen::Isometry3d& sensor_pose, const std::vector<Eigen::Vector3d>& points) {
+        if (points.empty()) return 0.0;
+        int visible_count = 0;
+        for (const auto& p : points) {
+            if (isPointInBeam(sensor_pose, p)) {
+                visible_count++;
+            }
+        }
+        return static_cast<double>(visible_count) / points.size();
+    }
+
+
+
 
     /**
      * @brief Checks what fraction of a ball is illuminated by the beam (Pose Variant).
      * @param sensor_pose The pose of the sensor/tool
-     * @param center_vec Ball center (x,y,z)
+     * @param center Ball center (x,y,z)
      * @param radius Ball radius
      * @return double Fraction [0.0, 1.0]
      */
-    double checkBallBeamVisibility(const Eigen::Isometry3d& sensor_pose, const std::vector<double>& center_vec, double radius) {
-        Eigen::Vector3d center(center_vec[0], center_vec[1], center_vec[2]);
+    double checkBallBeamVisibility(const Eigen::Isometry3d& sensor_pose, const Eigen::Vector3d center, double radius) {
 
         int visible_count = 0;
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
@@ -134,11 +155,11 @@ public:
     /**
      * @brief Checks what fraction of a ball is illuminated by the beam (Joint Space Variant).
      * @param joints Robot configuration
-     * @param center_vec Ball center (x,y,z)
+     * @param center Ball center (x,y,z)
      * @param radius Ball radius
      * @return double Fraction [0.0, 1.0]
      */
-    double checkBallBeamVisibility(const std::vector<double>& joints, const std::vector<double>& center_vec, double radius) {
+    double checkBallBeamVisibility(const std::vector<double>& joints, const Eigen::Vector3d center, double radius) {
         if (!fk_solver_) {
             throw std::runtime_error("VisibilityOracle: FK Solver not set.");
         }
@@ -146,7 +167,52 @@ public:
         Eigen::Isometry3d pose = fk_solver_(joints);
         
         // Delegate to Pose variant
-        return checkBallBeamVisibility(pose, center_vec, radius);
+        return checkBallBeamVisibility(pose, center, radius);
+    }
+
+    /**
+     * @brief Checks what fraction of a ball is illuminated by the beam (Source Point Variant).
+     * Assumes the beam is oriented directly towards the ball center.
+     * @param source The position of the light source (x,y,z)
+     * @param center Ball center (x,y,z)
+     * @param radius Ball radius
+     * @return double Fraction [0.0, 1.0]
+     */
+    double checkBallBeamVisibility(const Eigen::Vector3d source, const Eigen::Vector3d center, double radius) {
+
+        Eigen::Vector3d dir = center - source;
+        double dist = dir.norm();
+
+        // Handle singularity (Source is inside/at center)
+        if (dist < 1e-4) {
+            return 1.0; // Assume fully visible if coincident
+        }
+
+        // 1. Construct Look-At Rotation
+        // Z-axis points from Source -> Center
+        Eigen::Vector3d z_axis = dir / dist;
+        
+        // Handle Up vector singularity
+        Eigen::Vector3d world_up = Eigen::Vector3d::UnitZ();
+        if (std::abs(z_axis.dot(world_up)) > 0.99) {
+            world_up = Eigen::Vector3d::UnitX();
+        }
+
+        Eigen::Vector3d x_axis = world_up.cross(z_axis).normalized();
+        Eigen::Vector3d y_axis = z_axis.cross(x_axis).normalized();
+
+        Eigen::Matrix3d rotation;
+        rotation.col(0) = x_axis;
+        rotation.col(1) = y_axis;
+        rotation.col(2) = z_axis;
+
+        // 2. Construct Pose
+        Eigen::Isometry3d pose = Eigen::Isometry3d::Identity();
+        pose.translation() = source;
+        pose.linear() = rotation;
+
+        // 3. Delegate to Pose variant
+        return checkBallBeamVisibility(pose, center, radius);
     }
 
     /**
