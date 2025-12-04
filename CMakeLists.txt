@@ -126,8 +126,17 @@ add_executable(visual_ik_client src/visual_ik_client.cpp)
 target_link_libraries(visual_ik_client ${catkin_LIBRARIES} yaml-cpp)
 add_dependencies(visual_ik_client ${catkin_EXPORTED_TARGETS})
 
+add_executable(visual_planning_client src/visual_planning_client.cpp)
+target_link_libraries(visual_planning_client
+   ${catkin_LIBRARIES}
+   yaml-cpp
+   visual_planner_lib
+)
+add_dependencies(visual_planning_client ${catkin_EXPORTED_TARGETS} ${${PROJECT_NAME}_EXPORTED_TARGETS})
+
 install(FILES config/targets.yaml
         DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config)
 
 install(DIRECTORY include/${PROJECT_NAME}/
         DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
+

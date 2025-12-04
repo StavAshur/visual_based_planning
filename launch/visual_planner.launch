@@ -1,0 +1,11 @@
+<launch>
+  <!-- ... robot description and other includes ... -->
+
+  <!-- NEW WAY (Private Namespace) -->
+  <node name="visual_planning_node" pkg="visual_based_planning" type="visual_planning_node" output="screen">
+      
+      <!-- Load parameters INSIDE the node tag -->
+      <rosparam command="load" file="$(find visual_based_planning)/config/planner_config.yaml" />
+      
+  </node>
+</launch>

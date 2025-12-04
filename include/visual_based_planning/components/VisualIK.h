@@ -22,7 +22,7 @@ public:
     VisualIK(moveit::core::RobotModelConstPtr model, 
              std::shared_ptr<ValidityChecker> checker,
              const std::string& group_name = "manipulator",
-             const std::string& ee_link = "tool0") // Change tool0 to your camera link
+             const std::string& ee_link = "tool0")
         : robot_model_(model), validity_checker_(checker), group_name_(group_name), ee_link_name_(ee_link)
     {
         robot_state_.reset(new moveit::core::RobotState(robot_model_));
@@ -41,6 +41,13 @@ public:
         return checkIK(pose, solution_out);
     }
 
+    void setGroupName(const std::string& group) {
+        group_name_ = group; 
+    }
+    
+    void setEELinkName(const std::string& ee_link) {
+        ee_link_name_ = ee_link;
+    }
 
     // =========================================================================================
     // 1. Core Logic: Solve IK for a Specific Orientation
@@ -63,50 +70,70 @@ public:
                        const Eigen::Matrix3d& orientation,
                        std::vector<double>& solution_out) 
     {
-        // 1. Update Robot State to get current position for Standoff Calculation
+        // Update Robot State to get current position for Standoff Calculation
         robot_state_->setJointGroupPositions(group_name_, current_joints);
         robot_state_->update();
         Eigen::Vector3d current_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
 
-        // 2. Calculate Standoff Distance (Preserve current distance)
-        double standoff_dist = (current_pos - target_mes.center).norm();
 
-        // B. Calculate Position based on Orientation
+        Eigen::Vector3d c = target_mes.center;
+        double r = target_mes.radius;  
+
         // We assume the camera looks down its local +Z axis.
-        Eigen::Vector3d z_axis_local(0, 0, 1);
-        Eigen::Vector3d viewing_direction = orientation * z_axis_local;
+        Eigen::Vector3d z_axis = orientation.col(2);
+        Eigen::Vector3d v = z_axis.normalized();
 
-        // Position = Center - (ForwardVector * distance)
-        Eigen::Vector3d desired_pos = target_mes.center - (viewing_direction.normalized() * standoff_dist);
+        // Compute valid segment [a, b] along v
+        Eigen::Vector3d a = c - (h - r) * v;
+        Eigen::Vector3d b = c - (r / std::tan(theta / 2.0)) * v;
+        double seg_length = (b - a).norm();
 
-        // C. Construct Full Pose
-        Eigen::Isometry3d desired_pose = Eigen::Isometry3d::Identity();
-        desired_pose.translation() = desired_pos;
-        desired_pose.linear() = orientation;
 
-        // D. Solve IK with Local Search
+        ROS_INFO("Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
+                a.x(), a.y(), a.z(),
+                b.x(), b.y(), b.z());
+
+
+        Eigen::Vector3d ab = b - a;
+        double t_param = ab.dot(current_pos - a) / ab.squaredNorm();
+
+        // clamping
+        t_param = (t_param < 0.0) ? 0.0 : t_param;
+        t_param = (t_param > 1.0) ? 1.0 : t_param;
+
+        Eigen::Vector3d p_prime = a + t_param * ab;
+
+
+        /// @todo THIS IS WRONG. DIR SHOULD BE EQUAL TO V. STEP SIZE SHOULD BE DIFFERENT FOR EACH DIRECTION.
+        Eigen::Vector3d dir = v;
+        double step_size_positive = seg_length * (1 - t_param)  / (2.0 * num_steps);
+        double step_size_negative = seg_length * t_param / (2.0 * num_steps);
+
+        // Construct Full Pose
+        Eigen::Isometry3d test_pose = Eigen::Isometry3d::Identity();
+        test_pose.translation() = p_prime;
+        test_pose.linear() = orientation;
+
+        // Solve IK with Local Search
         
-        // 1. Try ideal position
+        // Try ideal position
         // Note: robot_state_ is already set to current_joints from Step 1
-        if (checkIK(desired_pose, solution_out)) return true;
-
-        // 2. Search surroundings along the viewing axis
-        Eigen::Vector3d dir = viewing_direction.normalized(); 
-        Eigen::Vector3d p_prime = desired_pos;
-        Eigen::Isometry3d test_pose = desired_pose;
+        if (checkIK(test_pose, solution_out)) return true;
         
-        double step_size = 0.05; // 5 cm steps
-        size_t num_steps = 10;   // Search up to 50cm in each direction
+        /// @todo SHOULD BE FIXED! NOT THE RIGHT WAY!
+        // Eigen::Vector3d flashlight_adjust = Eigen::Vector3d(0, 0, 0.2);
+        // p_prime = p_prime - flashlight_adjust;
+        
 
-        for (size_t i = 1; i <= num_steps; i++) {
+        for (size_t i = 1; i <= num_steps / 2.0; i++) {
             // Step in +dir (Closer to target)
-            Eigen::Vector3d p_plus = p_prime + (i * step_size * dir);
+            Eigen::Vector3d p_plus = p_prime + (i * step_size_positive * dir);
             test_pose.translation() = p_plus;
             robot_state_->setJointGroupPositions(group_name_, current_joints); 
             if (checkIK(test_pose, solution_out)) return true;
 
             // Step in -dir (Further from target)
-            Eigen::Vector3d p_minus = p_prime - (i * step_size * dir);
+            Eigen::Vector3d p_minus = p_prime - (i * step_size_negative * dir);
             test_pose.translation() = p_minus;
             robot_state_->setJointGroupPositions(group_name_, current_joints);
             if (checkIK(test_pose, solution_out)) return true;
@@ -134,7 +161,17 @@ public:
 
         Ball mes;
         mes.center = centroid;
-        mes.radius = 0; // Not used for look-at calculation
+
+
+        double r = 0.0;
+        Eigen::Vector3d curr;
+        for (const auto& p : target_points) {
+            curr = Eigen::Vector3d(p.x, p.y, p.z);
+            double d = (curr - centroid).norm();
+            if (d > r) r = d;
+        }
+
+        mes.radius = r; 
 
         return solveVisualIK(current_joints, mes, orientation, solution_out);
     }

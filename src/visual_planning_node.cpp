@@ -21,21 +21,26 @@ public:
     VisualPlanningNode(planning_scene_monitor::PlanningSceneMonitorPtr psm) 
         : psm_(psm), pnh_("~") 
     {
+        ROS_WARN("Initializing Planning Service");
         // 1. Lock the scene to safely get the initial state
         planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
-        
+
         // 2. Get a copy of the scene for the planner
         planning_scene::PlanningScenePtr scene_ptr = ls->diff();
 
+        ROS_WARN("Got the scene, creating the planner...");
+
         // 3. Initialize Planner with default resolution (will be updated from config)
         planner_ = std::make_shared<visual_planner::VisualPlanner>(scene_ptr);
+
+        ROS_WARN("Created the planner, loading config...");
 
         // 4. Load Configuration from Parameter Server (YAML)
         loadConfig();
 
         // 5. Advertise Service
         service_ = nh_.advertiseService("plan_visibility_path", &VisualPlanningNode::planCallback, this);
-        ROS_INFO("Visual Planning Service Ready");
+        ROS_WARN("Visual Planning Service Ready");
     }
 
     void loadConfig() {
@@ -50,12 +55,32 @@ public:
         pnh_.param<double>("planner/visibility_threshold", vis_thresh, 0.8);
         planner_->setVisibilityThreshold(vis_thresh);
 
+        double resolution;
+        // Default 0.05 if not in YAML
+        pnh_.param<double>("planner/resolution", resolution, 0.05);
+        planner_->setResolution(resolution);
+
+        // Robot Configuration
+        std::string group_name;
+        // Load group_name from param server, default to "manipulator"
+        pnh_.param<std::string>("planner/group_name", group_name, "manipulator");
+        planner_->setGroupName(group_name);
+
+        std::string ee_link;
+        // Load ee_link_name from param server, default to "tool0"
+        pnh_.param<std::string>("planner/ee_link_name", ee_link, "tool0");
+        planner_->setEELinkName(ee_link);
+
+
+        // 2. Visibility Tool Params
+        VisibilityOracle::VisibilityToolParams visibility_tool_params; 
+        pnh_.param("planner/visibility_tool_params/beam_length", visibility_tool_params.beam_length, visibility_tool_params.beam_length);
+        pnh_.param("planner/visibility_tool_params/beam_angle", visibility_tool_params.beam_angle, visibility_tool_params.beam_angle);
+
+        planner_->setVisibilityToolParams(visibility_tool_params);
+
         // 2. RRT Params
-        // We create a local struct which is initialized with the defaults defined in VisualPlanner.h
         visual_planner::RRTParams rrt; 
-        
-        // We try to overwrite the defaults with values from YAML. 
-        // If YAML key is missing, rrt.goal_bias remains its default value.
         pnh_.param("planner/rrt/goal_bias", rrt.goal_bias, rrt.goal_bias);
         pnh_.param("planner/rrt/max_extension", rrt.max_extension, rrt.max_extension);
         pnh_.param("planner/rrt/max_iterations", rrt.max_iterations, rrt.max_iterations);
@@ -75,18 +100,26 @@ public:
 
         planner_->setPRMParams(prm);
         
-        ROS_INFO("Planner configuration loaded.");
+        ROS_INFO("Planner configuration loaded. Group: %s, EE: %s, Res: %.3f", 
+                 group_name.c_str(), ee_link.c_str(), resolution);
     }
 
     bool planCallback(visual_based_planning::PlanVisibilityPath::Request &req,
                       visual_based_planning::PlanVisibilityPath::Response &res) {
         
-        ROS_INFO("Received planning request.");
+        ROS_WARN("Received planning request.");
         
-        // 1. Pass Targets to Planner
+        // 1. UPDATE SCENE: Get a fresh snapshot from the monitor
+        planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
+        planning_scene::PlanningScenePtr fresh_scene = ls->diff();
+        
+        // Pass this fresh scene to the planner to update obstacles
+        planner_->setPlanningScene(fresh_scene);
+
+        // 2. Pass Targets to Planner
         planner_->computeTargetMES(req.task.target_points);
 
-        // 2. Pass Start State
+        // 3. Pass Start State
         if (!req.task.start_joints.empty()) {
             planner_->setStartJoints(req.task.start_joints);
         } else {
@@ -100,7 +133,7 @@ public:
             planner_->setStartJoints(current_joints);
         }
 
-        // 3. Determine Planner Mode
+        // 4. Determine Planner Mode
         // Priority: Service Request Override > YAML Configuration > Default "VisRRT"
         std::string mode;
         pnh_.param<std::string>("planner/mode", mode, "VisRRT");
@@ -109,7 +142,7 @@ public:
              mode = req.planner_type;
         }
 
-        // 4. Execute Planning
+        // 5. Execute Planning
         bool success = false;
         if (mode.find("PRM") != std::string::npos) {
              success = planner_->planVisPRM();
@@ -117,12 +150,12 @@ public:
              success = planner_->planVisRRT();
         }
 
-        // 5. Pack Response
+        // 6. Pack Response
         res.success = success;
         
         if (success) {
             const auto& raw_path = planner_->getResultPath();
-            ROS_INFO("Path found with %lu states.", raw_path.size());
+            ROS_WARN("Path found with %lu states.", raw_path.size());
             
             planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
             std::string group = "manipulator"; 
@@ -145,21 +178,37 @@ public:
     }
 };
 
+
+
 int main(int argc, char** argv) {
     ros::init(argc, argv, "visual_planning_node");
+    ros::NodeHandle nh;
+
+    // 1. START ASYNC SPINNER IMMEDIATELY
+    // MoveIt requires this to process TF and other background updates during initialization
+    ros::AsyncSpinner spinner(2); // Use 2 threads
+    spinner.start();
     
-    // Load MoveIt Planning Scene Monitor
-    robot_model_loader::RobotModelLoaderPtr robot_model_loader(new robot_model_loader::RobotModelLoader("robot_description"));
-    planning_scene_monitor::PlanningSceneMonitorPtr psm(new planning_scene_monitor::PlanningSceneMonitor(robot_model_loader));
+    // 2. Load MoveIt Planning Scene Monitor
+    // Make sure "robot_description" is reachable. 
+    // If your node is in a namespace, you might need "/robot_description"
+    robot_model_loader::RobotModelLoaderPtr robot_model_loader(
+        new robot_model_loader::RobotModelLoader("robot_description"));
+
+    planning_scene_monitor::PlanningSceneMonitorPtr psm(
+        new planning_scene_monitor::PlanningSceneMonitor(robot_model_loader));
     
-    // Start Monitors
+    // 3. Start Monitors
     psm->startSceneMonitor();
     psm->startWorldGeometryMonitor();
     psm->startStateMonitor();
 
-    // Instantiate the Node Class
+    // 4. Instantiate the Node Class
     VisualPlanningNode node(psm);
 
-    ros::spin();
+    // 5. Wait for shutdown (Replace ros::spin() because AsyncSpinner is running)
+    ros::waitForShutdown();
+    
     return 0;
 }
+

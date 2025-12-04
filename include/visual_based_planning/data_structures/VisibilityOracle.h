@@ -54,7 +54,7 @@ private:
 public:
     VisibilityOracle() : rng_(std::random_device{}()), method_(VisibilityMethod::BF) {
         // Default params
-        tool_params_ = {M_PI / 4.0, 1.0}; // 45 deg half-angle, 1m length
+        tool_params_ = {M_PI / 12.0, 1.0}; // 15 deg half-angle, 1m length
     }
     ~VisibilityOracle() = default;
 
@@ -68,7 +68,11 @@ public:
 
     // --- Configuration Setters ---
 
-    void setToolParams(double beam_angle_rad, double beam_length_m) {
+    void setVisibilityToolParams(VisibilityToolParams params) {
+        tool_params_=params;
+    }
+
+    void setVisibilityToolParams(double beam_angle_rad, double beam_length_m) {
         tool_params_.beam_angle = beam_angle_rad;
         tool_params_.beam_length = beam_length_m;
     }
@@ -245,6 +249,10 @@ public:
         std::vector<double> v1 = {p1.x(), p1.y(), p1.z()};
         std::vector<double> v2 = {p2.x(), p2.y(), p2.z()};
         return checkVisibility(v1, v2);
+    }
+
+    void clear() {
+        obstacles_.clear();
     }
 
 private:

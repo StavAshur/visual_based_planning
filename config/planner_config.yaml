@@ -1,24 +1,30 @@
 planner:
   mode: "VisRRT" # "VisRRT" or "VisPRM"
-  use_visual_ik: false
+  use_visual_ik: true
   
   # Planning Group & Links
   group_name: "manipulator"
-  ee_link_name: "tool0"
-  
-  # General Settings
+  ee_link_name: "ur_arm_tool0"
+  # ee_link_name: "flashlight"
+
+  # # General Settings
   resolution: 0.05
   visibility_threshold: 0.8
 
+  # Visibility tool Parameters
+  visibility_tool_params:
+    beam_length: 1.0
+    beam_angle: 0.21
+
   # RRT Specific Parameters
   rrt:
-    goal_bias: 0.05
-    max_extension: 0.1
-    max_iterations: 5000
+    goal_bias: 0.01
+    max_extension: 3.0
+    max_iterations: 100000
 
-  # PRM Specific Parameters
-  prm:
-    num_neighbors: 10
-    num_samples: 1000
-    # 0 = LINEAR, 1 = BINARY_SEARCH
-    edge_validation_method: 1
+  # # PRM Specific Parameters
+  # prm:
+  #   num_neighbors: 10
+  #   num_samples: 1000
+  #   # 0 = LINEAR, 1 = BINARY_SEARCH
+  #   edge_validation_method: 1

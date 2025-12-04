@@ -32,6 +32,8 @@ private:
     
     double visibility_threshold_ = 0.8;
 
+    std::string group_name_ = "tool0";
+
 public:
     Sampler(moveit::core::RobotModelConstPtr model) 
         : robot_model_(model), rng_(std::random_device{}()) 
@@ -49,10 +51,14 @@ public:
         visibility_threshold_ = threshold;
     }
 
+    void setGroupName(const std::string& group) {
+        group_name_ = group; 
+    }
+
     std::vector<double> sampleUniform() {
         robot_state_->setToRandomPositions();
         std::vector<double> values;
-        robot_state_->copyJointGroupPositions("manipulator", values); 
+        robot_state_->copyJointGroupPositions(group_name_, values); 
         return values;
     }
 

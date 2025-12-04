@@ -18,6 +18,9 @@ private:
     planning_scene::PlanningScenePtr planning_scene_;
     double resolution_; // Resolution in radians
 
+    std::string group_name_= "manipulator";
+
+
 public:
     ValidityChecker(planning_scene::PlanningScenePtr scene, double resolution = 0.05) 
         : planning_scene_(scene), resolution_(resolution) {}
@@ -28,9 +31,9 @@ public:
     bool isValid(const std::vector<double>& joint_values) {
         moveit::core::RobotState& state = planning_scene_->getCurrentStateNonConst();
         
-        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup("manipulator");
+        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name_);
         if (!jmg) {
-             ROS_ERROR_ONCE("ValidityChecker: JointModelGroup 'manipulator' not found.");
+             ROS_ERROR("ValidityChecker: JointModelGroup %s not found.", group_name_.c_str());
              return false;
         }
         
@@ -126,6 +129,14 @@ public:
 
         // If loop completes, we reached the target_state safely
         return target_state;
+    }
+
+    void setResolution(double new_res){
+        resolution_ = new_res;
+    }
+
+    void setGroupName(const std::string& group) {
+        group_name_ = group; 
     }
 
 private:

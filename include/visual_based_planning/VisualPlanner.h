@@ -36,7 +36,7 @@ namespace visual_planner {
 // --- Parameter Structs ---
 
 struct RRTParams {
-    double goal_bias = 0.05;         
+    double goal_bias = std::pow(0.5, 7);         
     double max_extension = 0.1;      
     int max_iterations = 5000;       
 };
@@ -75,6 +75,8 @@ private:
     std::shared_ptr<VisibilityOracle> vis_oracle_;
     std::shared_ptr<VisibilityIntegrity> vis_integrity_;
 
+    planning_scene::PlanningScenePtr planning_scene_; // Keep reference to scene
+
     // Robot State Tracking
     moveit::core::RobotStatePtr robot_state_;
     std::string group_name_;
@@ -87,7 +89,8 @@ public:
     VisualPlanner(const planning_scene::PlanningScenePtr& scene, 
                   const std::vector<geometry_msgs::Point>& targets = {}, 
                   double resolution = 0.05) 
-        : resolution_(resolution), 
+        : planning_scene_(scene),
+          resolution_(resolution), 
           visibility_threshold_(0.8),
           group_name_("manipulator"), 
           ee_link_name_("tool0"),
@@ -128,12 +131,80 @@ public:
 
         // 7. Compute Target Enclosing Sphere
         computeTargetMES(targets);
+
+        // 8. Populate Visibility Oracle with Obstacles
+        updateObstaclesFromScene();
+    }
+
+    /**
+     * @brief Extracts collision objects from the PlanningScene and adds them to VisibilityOracle.
+     */
+    void updateObstaclesFromScene() {
+        if (!planning_scene_) return;
+
+        // Get list of collision objects in the world
+        // Note: This gets attached bodies and world objects
+        std::vector<std::string> object_ids = planning_scene_->getWorld()->getObjectIds();
+        
+        ROS_INFO("VisualPlanner: Extracting %lu obstacles from PlanningScene...", object_ids.size());
+
+        for (const std::string& id : object_ids) {
+            // Get the object (CollisionObject)
+            const collision_detection::World::ObjectConstPtr& obj = planning_scene_->getWorld()->getObject(id);
+            if (!obj) continue;
+
+            // Iterate through shapes in the object (could be mesh, box, etc.)
+            for (size_t i = 0; i < obj->shapes_.size(); ++i) {
+                // Compute AABB for the shape
+                // We need to transform the shape pose to world frame
+                Eigen::Isometry3d shape_pose = obj->shape_poses_[i]; 
+                
+                double x_min, y_min, z_min, x_max, y_max, z_max;
+                
+                if (obj->shapes_[i]->type == shapes::BOX) {
+                    const shapes::Box* box = static_cast<const shapes::Box*>(obj->shapes_[i].get());
+                    // Half extents
+                    double hx = box->size[0]/2.0;
+                    double hy = box->size[1]/2.0;
+                    double hz = box->size[2]/2.0;
+                    
+                    // Transform the 8 corners and find min/max
+                    // (Simplified: assuming axis aligned for now, but really should rotate)
+                    // If we assume the objects are somewhat axis aligned or we take a loose bound:
+                    Eigen::Vector3d center = shape_pose.translation();
+                    // Just add the radius of the box to center (very loose)
+                    double radius = std::sqrt(hx*hx + hy*hy + hz*hz);
+                    x_min = center.x() - radius; x_max = center.x() + radius;
+                    y_min = center.y() - radius; y_max = center.y() + radius;
+                    z_min = center.z() - radius; z_max = center.z() + radius;
+                    
+                    vis_oracle_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max, i);
+                } 
+                else if (obj->shapes_[i]->type == shapes::SPHERE) {
+                    const shapes::Sphere* sphere = static_cast<const shapes::Sphere*>(obj->shapes_[i].get());
+                    Eigen::Vector3d center = shape_pose.translation();
+                    double r = sphere->radius;
+                    vis_oracle_->addObstacle(center.x()-r, center.y()-r, center.z()-r, 
+                                             center.x()+r, center.y()+r, center.z()+r, i);
+                }
+                // Add MESH support if needed later
+            }
+        }
+    }
+
+    void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
+        planning_scene_ = scene;
+        updateObstaclesFromScene();
     }
 
     // --- Configuration Getters/Setters ---
     void setRRTParams(const RRTParams& params) { rrt_params_ = params; }
     void setPRMParams(const PRMParams& params) { prm_params_ = params; }
     
+    void setVisibilityToolParams(const VisibilityOracle::VisibilityToolParams& params) {
+        vis_oracle_->setVisibilityToolParams(params); 
+    }
+
     void setVisibilityThreshold(double t) {
         visibility_threshold_ = t;
         if (sampler_) sampler_->setVisibilityThreshold(t);
@@ -146,6 +217,29 @@ public:
     const std::vector<double>& getStartJoints() const { return start_joint_values_; }
 
     const std::vector<std::vector<double>>& getResultPath() const { return result_path_; }
+
+
+    // NEW SETTERS needed for full config loading
+    void setResolution(double res) { 
+        resolution_ = res;
+        validity_checker_->setResolution(res);
+    }
+
+    void setGroupName(const std::string& group) {
+        group_name_ = group; 
+        vis_ik_->setGroupName(group);
+        sampler_->setGroupName(group);
+        validity_checker_->setGroupName(group);
+    }
+    
+    void setEELinkName(const std::string& ee_link) {
+        ee_link_name_ = ee_link;
+        vis_ik_->setEELinkName(ee_link);
+    }
+    
+    std::string getGroupName() const { return group_name_; }
+    std::string getEELinkName() const { return ee_link_name_; }
+
 
     // ========================================================================
     // 1. Core Primitives
@@ -198,6 +292,8 @@ public:
             target_mes_.center = centroid;
             target_mes_.radius = std::sqrt(max_dist_sq);
         }
+        ROS_INFO("Target MES has center = (%f,%f,%f) and radius = %f",
+                target_mes_.center.x(), target_mes_.center.y(), target_mes_.center.z(), target_mes_.radius);
     }
 
     VertexDesc addState(const std::vector<double>& q) {
@@ -252,6 +348,9 @@ public:
 
         // 1. Main Loop
         for (int i = 0; i < rrt_params_.max_iterations; ++i) {
+            
+            ROS_INFO("Starting iteration %d", i);
+
             std::vector<double> q_rand;
             bool valid_sample = false;
 
@@ -315,6 +414,7 @@ public:
                     target_mes_.center,
                     target_mes_.radius
                 );
+                ROS_INFO("Visibility score was %f.", potential_vis);
 
                 if (potential_vis > visibility_threshold_) {
                     // Try to snap
