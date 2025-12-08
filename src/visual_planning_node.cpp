@@ -71,6 +71,10 @@ public:
         pnh_.param<std::string>("planner/ee_link_name", ee_link, "tool0");
         planner_->setEELinkName(ee_link);
 
+        bool shortcutting;
+        pnh_.param<bool>("planner/enable_shortcutting", shortcutting, true);
+        planner_->setShortcutting(shortcutting);
+
 
         // 2. Visibility Tool Params
         VisibilityOracle::VisibilityToolParams visibility_tool_params; 
@@ -123,7 +127,6 @@ public:
         if (!req.task.start_joints.empty()) {
             planner_->setStartJoints(req.task.start_joints);
         } else {
-            planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
             std::vector<double> current_joints;
             // Use configured group name if possible, else default
             std::string group = "manipulator"; 
@@ -157,14 +160,10 @@ public:
             const auto& raw_path = planner_->getResultPath();
             ROS_WARN("Path found with %lu states.", raw_path.size());
             
-            planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
             std::string group = "manipulator"; 
             pnh_.param<std::string>("planner/group_name", group, "manipulator");
-            
             const moveit::core::JointModelGroup* jmg = ls->getRobotModel()->getJointModelGroup(group);
-            
             res.trajectory.joint_names = jmg->getActiveJointModelNames();
-            
             for (const auto& conf : raw_path) {
                 trajectory_msgs::JointTrajectoryPoint point;
                 point.positions = conf;
@@ -173,7 +172,6 @@ public:
         } else {
             ROS_WARN("Planner failed to find a solution.");
         }
-        
         return true;
     }
 };

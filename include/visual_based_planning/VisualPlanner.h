@@ -51,7 +51,9 @@ class VisualPlanner {
 private:
     // --- Configuration & State ---
     double resolution_;
-    double visibility_threshold_; 
+    double visibility_threshold_;
+    bool shortcutting_;
+    bool use_visual_ik_;
     Ball target_mes_; // Moved to top-level state
     RRTParams rrt_params_;
     PRMParams prm_params_;
@@ -59,7 +61,7 @@ private:
     // Planner State Variables
     std::vector<double> start_joint_values_;
     std::vector<std::vector<double>> result_path_;
-    bool use_visual_ik_;
+    
 
     // --- Data Structures ---
     GraphManager graph_;
@@ -94,7 +96,9 @@ public:
           visibility_threshold_(0.8),
           group_name_("manipulator"), 
           ee_link_name_("tool0"),
-          rng_(std::random_device{}())
+          rng_(std::random_device{}()),
+          shortcutting_(true),
+          use_visual_ik_(false)
     {
         // 1. Initialize Validity Checker first
         validity_checker_ = std::make_shared<ValidityChecker>(scene, resolution);
@@ -172,11 +176,10 @@ public:
                     // (Simplified: assuming axis aligned for now, but really should rotate)
                     // If we assume the objects are somewhat axis aligned or we take a loose bound:
                     Eigen::Vector3d center = shape_pose.translation();
-                    // Just add the radius of the box to center (very loose)
-                    double radius = std::sqrt(hx*hx + hy*hy + hz*hz);
-                    x_min = center.x() - radius; x_max = center.x() + radius;
-                    y_min = center.y() - radius; y_max = center.y() + radius;
-                    z_min = center.z() - radius; z_max = center.z() + radius;
+
+                    x_min = center.x() - hx; x_max = center.x() + hx;
+                    y_min = center.y() - hy; y_max = center.y() + hy;
+                    z_min = center.z() - hz; z_max = center.z() + hz;
                     
                     vis_oracle_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max, i);
                 } 
@@ -195,7 +198,10 @@ public:
     void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
         planning_scene_ = scene;
         updateObstaclesFromScene();
+        validity_checker_->setPlanningScene(scene);
     }
+
+    void setShortcutting(bool enable) { shortcutting_ = enable; }
 
     // --- Configuration Getters/Setters ---
     void setRRTParams(const RRTParams& params) { rrt_params_ = params; }
@@ -355,20 +361,23 @@ public:
             bool valid_sample = false;
 
             // --- Step 1: Sampling ---
-            if (dist_01(rng_) > rrt_params_.goal_bias) {
-                // Uniform
-                q_rand = sampler_->sampleUniform();
-                valid_sample = true;
-            } else {
-                // Visibility-Biased (Delegated to Sampler)
-                if (sampler_->sampleVisibilityAwareState(sampling_radius, target_mes_, q_rand)) {
-                    valid_sample = true;
-                } else {
-                    q_rand = sampler_->sampleUniform();
-                    valid_sample = true;
-                }
-            }
+            // if (dist_01(rng_) > rrt_params_.goal_bias) {
+            //     // Uniform
+            //     q_rand = sampler_->sampleUniform();
+            //     valid_sample = true;
+            // } 
+            // else {
+            //     // Visibility-Biased (Delegated to Sampler)
+            //     if (sampler_->sampleVisibilityAwareState(sampling_radius, target_mes_, q_rand)) {
+            //         valid_sample = true;
+            //     } else {
+            //         q_rand = sampler_->sampleUniform();
+            //         valid_sample = true;
+            //     }
+            // }
 
+            q_rand = sampler_->sampleUniform();
+            valid_sample = true;
             if (!valid_sample) continue;
 
             // --- Step 2: Nearest Neighbor ---
@@ -391,6 +400,7 @@ public:
             // --- Step 5: Check Goal / Visual IK Connection ---
             
             // Check A: Direct Visibility
+            ROS_INFO("Direct visibility check:");
             double current_vis = vis_oracle_->checkBallBeamVisibility(q_new, target_mes_.center, target_mes_.radius);
             
             if (current_vis > visibility_threshold_) {
@@ -408,6 +418,7 @@ public:
                 robot_state_->update();
                 Eigen::Vector3d current_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
                 
+                ROS_INFO("Visibility check for VisualIK:");
                 // Check if this *position* is good
                 double potential_vis = vis_oracle_->checkBallBeamVisibility(
                     current_pos, 
@@ -431,7 +442,8 @@ public:
                                 ROS_INFO("VisRRT: Found solution via VisualIK snap.");
                                 std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, goal_id);
                                 result_path_.clear();
-                                for (auto v : path_idx) result_path_.push_back(graph_.getVertexConfig(v));
+                                // for (auto v : path_idx) result_path_.push_back(graph_.getVertexConfig(v));
+                                finalizePath(root_id, goal_id);
                                 return true;
                             }
                         }
@@ -448,6 +460,25 @@ public:
         ROS_INFO("VisPRM placeholder called");
         return true;
     }
+
+    // Helper to extract and smooth path
+    void finalizePath(VertexDesc start, VertexDesc goal) {
+        std::vector<VertexDesc> path_idx = graph_.shortestPath(start, goal);
+        std::vector<std::vector<double>> raw_path;
+        raw_path.reserve(path_idx.size());
+        
+        for (auto v : path_idx) {
+            raw_path.push_back(graph_.getVertexConfig(v));
+        }
+
+        if (shortcutting_) {
+            ROS_INFO("Smoothing path with shortcuts...");
+            result_path_ = path_smoother_->smoothPath(raw_path);
+        } else {
+            result_path_ = raw_path;
+        }
+    }
+
 };
 
 } // namespace visual_planner

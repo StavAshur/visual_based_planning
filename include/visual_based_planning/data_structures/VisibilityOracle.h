@@ -134,6 +134,19 @@ public:
      */
     double checkBallBeamVisibility(const Eigen::Isometry3d& sensor_pose, const Eigen::Vector3d center, double radius) {
 
+        // --- DEBUG START ---
+        // Eigen::Vector3d start = sensor_pose.translation();
+        // Eigen::Vector3d z_dir = sensor_pose.linear().col(2); 
+        // double len = (start - center).norm();
+        // Eigen::Vector3d end = start + (z_dir * len);
+
+        // ROS_WARN("[DEBUG] Beam Segment Check:\n  Start (Tool): [%.3f, %.3f, %.3f]\n  End (Z-proj): [%.3f, %.3f, %.3f]\n  Target Center: [%.3f, %.3f, %.3f]\n  Length: %.3f",
+        //          start.x(), start.y(), start.z(),
+        //          end.x(), end.y(), end.z(),
+        //          center.x(), center.y(), center.z(),
+        //          len);
+        // --- DEBUG END ---
+
         int visible_count = 0;
         std::uniform_real_distribution<double> dist(-1.0, 1.0);
 
@@ -265,9 +278,11 @@ private:
         // Transform target to Sensor Frame
         Eigen::Vector3d local_target = sensor_pose.inverse() * target;
 
+        double dist = local_target.norm();
+
         // 1. Check Range (Depth)
         // Assuming beam emanates along +Z axis
-        if (local_target.z() < 0.0 || local_target.z() > tool_params_.beam_length) {
+        if (local_target.z() < 0.0 || dist > tool_params_.beam_length) {
             return false;
         }
 
@@ -276,7 +291,7 @@ private:
         // The angle theta is between local_target and Z-axis (0,0,1).
         // cos(theta) = (v . z) / (|v| * |z|) = local_target.z() / local_target.norm()
         
-        double dist = local_target.norm();
+        
         if (dist < 1e-6) return true; // Point is at the sensor origin
 
         double cos_theta = local_target.z() / dist;
@@ -306,6 +321,11 @@ private:
         
         for (const auto& box : obstacles_) {
             if (bg::intersects(segment, box)) {
+                // ROS_INFO("[VisOracle] Occlusion! Segment: (%.2f, %.2f, %.2f) -> (%.2f, %.2f, %.2f) hit Box: min(%.2f, %.2f, %.2f) max(%.2f, %.2f, %.2f)",
+                //     bg::get<0, 0>(segment), bg::get<0, 1>(segment), bg::get<0, 2>(segment),
+                //     bg::get<1, 0>(segment), bg::get<1, 1>(segment), bg::get<1, 2>(segment),
+                //     box.min_corner().get<0>(), box.min_corner().get<1>(), box.min_corner().get<2>(),
+                //     box.max_corner().get<0>(), box.max_corner().get<1>(), box.max_corner().get<2>());
                 return false; // Blocked
             }
         }

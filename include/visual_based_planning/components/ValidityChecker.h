@@ -25,23 +25,47 @@ public:
     ValidityChecker(planning_scene::PlanningScenePtr scene, double resolution = 0.05) 
         : planning_scene_(scene), resolution_(resolution) {}
 
+
+    /**
+     * @brief Update the scene snapshot.
+     */
+    void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
+        planning_scene_ = scene;
+    }
+
     /**
      * @brief Checks if a single configuration is valid.
      */
     bool isValid(const std::vector<double>& joint_values) {
-        moveit::core::RobotState& state = planning_scene_->getCurrentStateNonConst();
-        
-        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name_);
-        if (!jmg) {
-             ROS_ERROR("ValidityChecker: JointModelGroup %s not found.", group_name_.c_str());
-             return false;
+        if (!planning_scene_) {
+            ROS_ERROR_THROTTLE(1.0, "ValidityChecker: PlanningScene is null!");
+            return false;
         }
+
+        moveit::core::RobotState& state = planning_scene_->getCurrentStateNonConst();
+        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup("manipulator");
+        if (!jmg) return false;
         
         state.setJointGroupPositions(jmg, joint_values);
+        state.update(); 
         
+        // --- UPDATED COLLISION REQUEST ---
         collision_detection::CollisionRequest req;
+        req.contacts = true; // Request contact details
+        req.max_contacts = 10; // Get multiple contacts
+        req.verbose = false; // Set to true for spammy logs if needed
+
         collision_detection::CollisionResult res;
         planning_scene_->checkCollision(req, res, state);
+        
+        if (res.collision) {
+            ROS_WARN_THROTTLE(1.0, "State is INVALID!");
+            for (const auto& contact : res.contacts) {
+                // contact.first is a pair of strings (body_name_1, body_name_2)
+                ROS_WARN("Collision between: '%s' and '%s'", 
+                         contact.first.first.c_str(), contact.first.second.c_str());
+            }
+        }
         
         return !res.collision;
     }

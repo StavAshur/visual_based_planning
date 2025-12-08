@@ -93,6 +93,14 @@ int main(int argc, char** argv)
   // Instantiate Executer (assumes "manipulator" group, change if needed)
   PathExecuter executer("manipulator");
   
+  double velocity_scaling = 0.1;
+  double accelaration_scaling = 0.1;
+
+  // Apply
+  executer.setVelocityScaling(velocity_scaling);
+  executer.setAccelerationScaling(accelaration_scaling);
+  
+
   if (executer.executePath(path_to_execute)) {
       ROS_INFO("Motion complete.");
   } else {
