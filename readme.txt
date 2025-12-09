@@ -116,10 +116,8 @@ I have changed the file /opt/ros/melodic/share/husky_description/urdf/tau01_husk
 Removed the gripper links and camera link because they were causing collisions in moveit for some reason,
 and also not actually physically installed at the moment.
 
-
 OMPL original lib files are stored in a dir. Different place in each pc I'm using, but main one is:
 /opt/ros/melodic/lib/temp_ompl_lib_files
-
 
 In order to attach stl files of luminating object - changed original_urdf_tau01.xacro,
 and saved a backup of revious version as backup_original_urdf_tau01.xacro
@@ -135,6 +133,7 @@ Some more collision disabling was added to the srdf file because the planning wo
   <disable_collisions link1="rear_bumper_extension_link" link2="rear_bumper_link" reason="Adjacent" />
   <disable_collisions link1="rear_bumper_extension_link" link2="top_chassis_link" reason="Adjacent" />
 
+Also added a "cable_link" which is supposed to protect the cables from manipulator movements
 
 =================================================================
 ================ Using distrobox (Ubuntu 24.04) =================

@@ -55,10 +55,33 @@ public:
         pnh_.param<double>("planner/visibility_threshold", vis_thresh, 0.8);
         planner_->setVisibilityThreshold(vis_thresh);
 
+        bool use_vi;
+        pnh_.param<bool>("planner/use_visibility_integrity", use_vi, false);
+        planner_->setUseVisibilityIntegrity(use_vi);
+
+        // Load VI Params if enabled (or always, doesn't hurt)
+        visual_planner::VisibilityIntegrityParams vi_params;
+        pnh_.param("planner/visibility_integrity/vi_threshold", vi_params.vi_threshold, 0.7);
+        pnh_.param("planner/visibility_integrity/k_neighbors", vi_params.k_neighbors, 5);
+        pnh_.param("planner/visibility_integrity/limit_diameter_factor", vi_params.limit_diameter_factor, 2.0);
+        planner_->setVisibilityIntegrityParams(vi_params);
+
         double resolution;
         // Default 0.05 if not in YAML
         pnh_.param<double>("planner/resolution", resolution, 0.05);
         planner_->setResolution(resolution);
+
+        visual_planner::BoundingBox bounds;
+        pnh_.param("planner/workspace_bounds/x_min", bounds.x_min, -2.0);
+        pnh_.param("planner/workspace_bounds/x_max", bounds.x_max, 2.0);
+        pnh_.param("planner/workspace_bounds/y_min", bounds.y_min, -2.0);
+        pnh_.param("planner/workspace_bounds/y_max", bounds.y_max, 2.0);
+        pnh_.param("planner/workspace_bounds/z_min", bounds.z_min, -0.5);
+        pnh_.param("planner/workspace_bounds/z_max", bounds.z_max, 3.5);
+        
+        planner_->setWorkspaceBounds(bounds);
+        ROS_INFO("Workspace Bounds: X[%.1f, %.1f] Y[%.1f, %.1f] Z[%.1f, %.1f]", 
+                 bounds.x_min, bounds.x_max, bounds.y_min, bounds.y_max, bounds.z_min, bounds.z_max);
 
         // Robot Configuration
         std::string group_name;

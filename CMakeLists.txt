@@ -1,56 +1,3 @@
-# cmake_minimum_required(VERSION 3.6)
-# project(visual_based_planning)
-
-
-# find_package(catkin REQUIRED COMPONENTS
-#   roscpp
-#   std_msgs
-#   geometry_msgs
-#   message_generation
-#   moveit_core
-#   moveit_ros_planning
-#   moveit_ros_planning_interface
-# )
-
-# find_package(yaml-cpp REQUIRED)
-
-# add_service_files(
-#   FILES
-#   VisualIK.srv
-# )
-
-# generate_messages(
-#   DEPENDENCIES
-#   std_msgs
-#   geometry_msgs
-# )
-
-
-# catkin_package(
-
-# )
-
-
-# include_directories(
-#   ${catkin_INCLUDE_DIRS}
-# )
-
-
-# add_executable(visual_ik_server src/visual_ik_server.cpp)
-# add_dependencies(visual_ik_server ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-# target_link_libraries(visual_ik_server ${catkin_LIBRARIES})
-
-
-# add_executable(visual_ik_client src/visual_ik_client.cpp)
-# target_link_libraries(visual_ik_client
-#    ${catkin_LIBRARIES}
-#    yaml-cpp
-# )
-# add_dependencies(visual_ik_client ${catkin_EXPORTED_TARGETS})
-
-# install(FILES config/targets.yaml
-#         DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config)
-
 cmake_minimum_required(VERSION 3.6)
 project(visual_based_planning)
 
@@ -73,6 +20,11 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(yaml-cpp REQUIRED)
 find_package(Boost REQUIRED system filesystem date_time thread)
 find_package(Eigen3 REQUIRED)
+
+# set(CUDA_TOOLKIT_ROOT_DIR /usr/local/cuda-11.8)
+# find_package(CUDA REQUIRED)
+# set(CUDA_SOURCES src/visibility_cuda.cu)
+# cuda_add_library(visibility_cuda_lib ${CUDA_SOURCES})
 
 add_service_files(
   FILES
@@ -133,6 +85,13 @@ target_link_libraries(visual_planning_client
    visual_planner_lib
 )
 add_dependencies(visual_planning_client ${catkin_EXPORTED_TARGETS} ${${PROJECT_NAME}_EXPORTED_TARGETS})
+
+# add_executable(visual_planning_node src/visual_planning_node.cpp) 
+# target_link_libraries(visual_planning_node 
+#   visibility_cuda_lib
+#   ${catkin_LIBRARIES} 
+#   ${CUDA_LIBRARIES}
+# )
 
 install(FILES config/targets.yaml
         DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config)

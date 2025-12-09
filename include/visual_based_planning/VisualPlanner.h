@@ -47,13 +47,23 @@ struct PRMParams {
     EdgeCheckMode edge_validation_method = EdgeCheckMode::BINARY_SEARCH;
 };
 
+struct VisibilityIntegrityParams {
+    double vi_threshold = 0.7;
+    int k_neighbors = 5;
+    double limit_diameter_factor = 2.0;
+};
+
 class VisualPlanner {
 private:
     // --- Configuration & State ---
     double resolution_;
     double visibility_threshold_;
+    BoundingBox workspace_bounds_;
     bool shortcutting_;
     bool use_visual_ik_;
+    bool use_visibility_integrity_;
+    VisibilityIntegrityParams visibility_integrity_params_;
+
     Ball target_mes_; // Moved to top-level state
     RRTParams rrt_params_;
     PRMParams prm_params_;
@@ -98,7 +108,8 @@ public:
           ee_link_name_("tool0"),
           rng_(std::random_device{}()),
           shortcutting_(true),
-          use_visual_ik_(false)
+          use_visual_ik_(false),
+          use_visibility_integrity_(false)
     {
         // 1. Initialize Validity Checker first
         validity_checker_ = std::make_shared<ValidityChecker>(scene, resolution);
@@ -119,6 +130,7 @@ public:
         sampler_ = std::make_shared<Sampler>(scene->getRobotModel());
         sampler_->setVisualComponents(vis_ik_, vis_oracle_);
         sampler_->setVisibilityThreshold(visibility_threshold_);
+        sampler_->setValidityChecker(validity_checker_);
 
         // 5. Initialize Smoother
         path_smoother_ = std::make_shared<PathSmoother>(validity_checker_);
@@ -132,6 +144,12 @@ public:
             robot_state_->update();
             return robot_state_->getGlobalLinkTransform(ee_link_name_);
         });
+
+        const moveit::core::RobotState& current_state = scene->getCurrentState();
+        current_state.copyJointGroupPositions(group_name_, start_joint_values_);
+
+        workspace_bounds_ = {-2.0, 2.0, -2.0, 2.0, -0.5, 3.5};
+        sampler_->setWorkspaceBounds(workspace_bounds_);
 
         // 7. Compute Target Enclosing Sphere
         computeTargetMES(targets);
@@ -182,6 +200,7 @@ public:
                     z_min = center.z() - hz; z_max = center.z() + hz;
                     
                     vis_oracle_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max, i);
+                    validity_checker_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max);
                 } 
                 else if (obj->shapes_[i]->type == shapes::SPHERE) {
                     const shapes::Sphere* sphere = static_cast<const shapes::Sphere*>(obj->shapes_[i].get());
@@ -189,10 +208,17 @@ public:
                     double r = sphere->radius;
                     vis_oracle_->addObstacle(center.x()-r, center.y()-r, center.z()-r, 
                                              center.x()+r, center.y()+r, center.z()+r, i);
+                    validity_checker_->addObstacle(center.x()-r, center.y()-r, center.z()-r,
+                                                   center.x()+r, center.y()+r, center.z()+r);
                 }
                 // Add MESH support if needed later
             }
         }
+    }
+
+    void setWorkspaceBounds(const BoundingBox& bounds) {
+        workspace_bounds_ = bounds;
+        if (sampler_) sampler_->setWorkspaceBounds(bounds);
     }
 
     void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
@@ -218,6 +244,17 @@ public:
 
     void setUseVisualIK(bool use) { use_visual_ik_ = use; }
     bool getUseVisualIK() const { return use_visual_ik_; }
+
+
+    void setUseVisibilityIntegrity(bool enable) {
+        use_visibility_integrity_ = enable;
+    }
+
+    void setVisibilityIntegrityParams(const VisibilityIntegrityParams& params) {
+        visibility_integrity_params_ = params;
+        vis_integrity_->setKNeighbors(visibility_integrity_params_.k_neighbors);
+        vis_integrity_->setLimitDiameterFactor(visibility_integrity_params_.limit_diameter_factor);
+    }
 
     void setStartJoints(const std::vector<double>& start) { start_joint_values_ = start; }
     const std::vector<double>& getStartJoints() const { return start_joint_values_; }

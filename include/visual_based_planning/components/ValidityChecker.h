@@ -10,12 +10,20 @@
 #include <moveit/robot_state/robot_state.h>
 #include "../common/Types.h"
 
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/geometries/box.hpp>
 
-
+namespace bg = boost::geometry;
+typedef bg::model::point<double, 3, bg::cs::cartesian> Point3D;
+typedef bg::model::box<Point3D> Box3D;
 
 class ValidityChecker {
 private:
     planning_scene::PlanningScenePtr planning_scene_;
+
+    std::vector<Box3D> obstacles_;
+
     double resolution_; // Resolution in radians
 
     std::string group_name_= "manipulator";
@@ -31,6 +39,15 @@ public:
      */
     void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
         planning_scene_ = scene;
+    }
+
+    void clearObstacles() {
+        obstacles_.clear();
+    }
+
+    void addObstacle(double min_x, double min_y, double min_z, double max_x, double max_y, double max_z) {
+        Box3D b(Point3D(min_x, min_y, min_z), Point3D(max_x, max_y, max_z));
+        obstacles_.push_back(b);
     }
 
     /**
@@ -161,6 +178,19 @@ public:
 
     void setGroupName(const std::string& group) {
         group_name_ = group; 
+    }
+
+    /**
+     * @brief Checks if a 3D point is inside any known obstacle.
+     */
+    bool isPointInObstacle(double x, double y, double z) const {
+        Point3D p(x, y, z);
+        for (const auto& box : obstacles_) {
+            if (bg::within(p, box)) {
+                return true;
+            }
+        }
+        return false;
     }
 
 private:

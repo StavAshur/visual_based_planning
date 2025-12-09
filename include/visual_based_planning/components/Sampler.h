@@ -16,6 +16,7 @@
 // Dependencies
 #include "../data_structures/VisibilityOracle.h"
 #include "../common/Types.h"
+#include "ValidityChecker.h"
 #include "VisualIK.h"
 
 
@@ -29,8 +30,10 @@ private:
     
     std::shared_ptr<VisualIK> vis_ik_;
     std::shared_ptr<VisibilityOracle> vis_oracle_;
-    
+    std::shared_ptr<ValidityChecker> validity_checker_;
+
     double visibility_threshold_ = 0.8;
+    BoundingBox workspace_bounds_;
 
     std::string group_name_ = "tool0";
 
@@ -40,6 +43,7 @@ public:
     {
         robot_state_.reset(new moveit::core::RobotState(robot_model_));
         robot_state_->setToDefaultValues();
+        workspace_bounds_ = {-2.0, 2.0, -2.0, 2.0, -0.5, 3.5};
     }
 
     void setVisualComponents(std::shared_ptr<VisualIK> ik, std::shared_ptr<VisibilityOracle> oracle) {
@@ -51,6 +55,14 @@ public:
         visibility_threshold_ = threshold;
     }
 
+    void setValidityChecker(std::shared_ptr<ValidityChecker> checker) {
+        validity_checker_ = checker;
+    }
+
+    void setWorkspaceBounds(const BoundingBox& bounds) {
+        workspace_bounds_ = bounds;
+    }
+
     void setGroupName(const std::string& group) {
         group_name_ = group; 
     }
@@ -60,6 +72,34 @@ public:
         std::vector<double> values;
         robot_state_->copyJointGroupPositions(group_name_, values); 
         return values;
+    }
+
+    /**
+     * @brief Samples num_points valid 3D points from the workspace.
+     * Populates the provided vector to avoid copying.
+     */
+    void sampleValidPoints(int num_points, std::vector<Eigen::Vector3d>& out_points) {
+
+        std::uniform_real_distribution<double> dist_x(workspace_bounds_.x_min, workspace_bounds_.x_max);
+        std::uniform_real_distribution<double> dist_y(workspace_bounds_.y_min, workspace_bounds_.y_max);
+        std::uniform_real_distribution<double> dist_z(workspace_bounds_.z_min, workspace_bounds_.z_max);
+
+        out_points.reserve(out_points.size() + num_points);
+        int valid_count = 0;
+        int attempts = 0;
+        int max_attempts = num_points * 100; // Safety break
+
+        while (valid_count < num_points && attempts < max_attempts) {
+            double x = dist_x(rng_);
+            double y = dist_y(rng_);
+            double z = dist_z(rng_);
+
+            if (!validity_checker_->isPointInObstacle(x, y, z)) {
+                out_points.emplace_back(x, y, z);
+                valid_count++;
+            }
+            attempts++;
+        }
     }
 
     // --- Helpers ---
