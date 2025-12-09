@@ -76,6 +76,9 @@ to allow distrobox VMs to access ethernet socket
       gui is used to move the robot away from first position if invalid
 
 
+The order matters! The scene must be loaded after the service is launched.
+
+
 =================================================================
 =================== Planner parameterization ====================
 =================================================================
@@ -105,14 +108,55 @@ to allow distrobox VMs to access ethernet socket
   5.2 execution/acceleration_scaling: Global acceleration limit factor (e.g. 0.1 = 10% accel).
 
 
+=================================================================
+========== Changes made in the Husky onboard computer ===========
+=================================================================
+
+I have changed the file /opt/ros/melodic/share/husky_description/urdf/tau01_husky_extras.urdf.xacro IN THE ROBOT COMPUTER:
+Removed the gripper links and camera link because they were causing collisions in moveit for some reason,
+and also not actually physically installed at the moment.
+
+
+OMPL original lib files are stored in a dir. Different place in each pc I'm using, but main one is:
+/opt/ros/melodic/lib/temp_ompl_lib_files
+
+
+In order to attach stl files of luminating object - changed original_urdf_tau01.xacro,
+and saved a backup of revious version as backup_original_urdf_tau01.xacro
+Also added collision disables to /home/roblab22/catkin_ws/src/tau01_husky/tau01_moveit_config/config/husky.srdf:
+<disable_collisions link1="ur_arm_wrist_3_link" link2="flashlight" reason="Adjacent" />
+<disable_collisions link1="flashlight" link2="light_beam" reason="Adjacent" />
+
+Some more collision disabling was added to the srdf file because the planning would not be perforned otherwise:
+  <disable_collisions link1="base_link" link2="front_bumper_extension_link" reason="Adjacent" />
+  <disable_collisions link1="base_link" link2="rear_bumper_extension_link" reason="Adjacent" />
+  <disable_collisions link1="front_bumper_extension_link" link2="front_bumper_link" reason="Adjacent" />
+  <disable_collisions link1="front_bumper_extension_link" link2="top_chassis_link" reason="Adjacent" />
+  <disable_collisions link1="rear_bumper_extension_link" link2="rear_bumper_link" reason="Adjacent" />
+  <disable_collisions link1="rear_bumper_extension_link" link2="top_chassis_link" reason="Adjacent" />
+
+
+=================================================================
+================ Using distrobox (Ubuntu 24.04) =================
+=================================================================
+
+To install vscode on an ubuntu 18.04 virutal machine:
+sudo apt update
+sudo apt install wget gpg
+wget https://update.code.visualstudio.com/1.74.3/linux-deb-x64/stable -O code_1.74.3-1668896808_amd64.deb
+sudo apt install ./code_1.74.3-1668896808_amd64.deb
+
+This is a way of creating a virutal machine that should, in theory, be able to visualize. Getting libboost issues though.
+distrobox create --image ubuntu:18.04 --name ubuntu-1804 --nvidia
+
+To allow distrobox port access I use the command:
+sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
 
 
 
-
-
-
-
-
+=================================================================
+============================= Misc. =============================
+=================================================================
 
 
 Joint states can be seen by
@@ -138,19 +182,9 @@ points:
   time_from_start: {secs: 5, nsecs: 0}"
 "
 
-I have changed the file /opt/ros/melodic/share/husky_description/urdf/tau01_husky_extras.urdf.xacro IN THE ROBOT COMPUTER:
-Removed the gripper links and camera link because they were causing collisions in moveit for some reason,
-and also not actually physically installed at the moment.
-
-Managed to move the robot using moveit with the python script in move_ur_with_ik.py in a new package I created called ur_moveit_control.
-Command to move the robot is: 
-"rosrun ur_moveit_control move_ur_with_ik.py"
-
-
-
-Setting the visual targets is easier with:
-"rosparam set /visual_targets "[-0.75, 0.0, 1.2, -0.75, 0.0, 1.1]"
-
+=================================================================
+=========== Old irrelevant stuff I did when used OMPL ===========
+=================================================================
 
 
 In order to change OMPL implementations:
@@ -230,41 +264,6 @@ I switched RRTConnect.h in /opt/ros/melodic/... for the same reason.
 Backup file is RRTConnect.h_old
 "sudo cp ~/ros-melodic-ompl-1.4.2/src/ompl/geometric/planners/rrt/RRTConnect.h /opt/ros/melodic/include/ompl-1.4/ompl/geometric/planners/rrt/"
 
-In order to run the visual IK:
-
-Define targets in 
-
-Run these in two terminals:
-"rosrun visual_based_planning visual_ik_server"
-"roslaunch visual_based_planning visual_ik_client.launch"
-
-In order to attach stl files of luminating object - changed original_urdf_tau01.xacro,
-and saved a backup of revious version as backup_original_urdf_tau01.xacro
-Also added collision disables to /home/roblab22/catkin_ws/src/tau01_husky/tau01_moveit_config/config/husky.srdf:
-<disable_collisions link1="ur_arm_wrist_3_link" link2="flashlight" reason="Adjacent" />
-<disable_collisions link1="flashlight" link2="light_beam" reason="Adjacent" />
-
-Some more collision disabling was added to the srdf file because the planning would not be perforned otherwise:
-  <disable_collisions link1="base_link" link2="front_bumper_extension_link" reason="Adjacent" />
-  <disable_collisions link1="base_link" link2="rear_bumper_extension_link" reason="Adjacent" />
-  <disable_collisions link1="front_bumper_extension_link" link2="front_bumper_link" reason="Adjacent" />
-  <disable_collisions link1="front_bumper_extension_link" link2="top_chassis_link" reason="Adjacent" />
-  <disable_collisions link1="rear_bumper_extension_link" link2="rear_bumper_link" reason="Adjacent" />
-  <disable_collisions link1="rear_bumper_extension_link" link2="top_chassis_link" reason="Adjacent" />
-
-
-
-
-The order matters!!!! The scene must be loaded after the service is launched!!!
-roslaunch visual_based_planning visual_planner.launch
-roslaunch scene_builder load_scene.launch
-rosrun visual_based_planning visual_planning_client _targets_yaml:=$(rospack find visual_based_planning)/config/targets.yaml
-
-
-
-
-
-
 
 
 I did the exact same thing with trac_ik_kinematics_plugin:
@@ -291,55 +290,3 @@ This is obviously very bad, but I hope it's good enough.
 
 
 
-
-To install vscode on an ubuntu 18.04 virutal machine:
-sudo apt update
-sudo apt install wget gpg
-wget https://update.code.visualstudio.com/1.74.3/linux-deb-x64/stable -O code_1.74.3-1668896808_amd64.deb
-sudo apt install ./code_1.74.3-1668896808_amd64.deb
-
-This is a way of creating a virutal machine that should, in theory, be able to visualize. Getting libboost issues though.
-distrobox create --image ubuntu:18.04 --name ubuntu-1804 --nvidia
-
-Kinematics struct is here: include/moveit/kinematics_base/kinematics_base.h
-I should probably add "visibility" field to it.
-
-To allow distrobox port access:
-sudo sysctl -w net.ipv4.ping_group_range="0 2147483647"
-
-
-I'm using ROS Melodic to control a robot connected to my computer with an ethernet cable.
-The robot (a husky platform with a mounted UR5 has an onboard pc which, if I understand correctly, serves as the ROS master.
-I am running a couple of launch files on the robot by ssh'ing into it (moveit and such) and trying to use a script to move the robot to a new position by giving it an IK pose.
-
-I'm using ROS Melodic to simulate and control a robot. I am developing new motion planning algorithms,
-and for that purpose I have downloaded the source code of OMPL, and am making additions and changes to it.
-After compiling the source code I move the binaries to /opt/ros/melodic/bin, and then when I launch moveit
-the code being run is the modified code.
-
-
-I'm using ROS Melodic to simulate and control a robot. I am launching a pre-made demo.launch file that launches moveit and rviz.
-
-
- Implement planVisRRT. The algorithm should have two modes - one that uses VisualIK and one that doesn't.  The pseudocode is:
-
-
-0. initialize tree with current joint values as the root
-
-1. Generate a random number between 0 and 1, if that number is bigger than rrt_goal_bias_ sample random point in joint_space.
-  Otherwise sample 3d points from the ball with radius (center - current_ee_position).norm() * 2 around the center of the ball 
-  enclosing the targets (stored in target_mes_) until a point p is found that sees more than visibility_threshold_ of target_mes_.
-  Then call greedyOrientationVisualIK() with the 3d point as position, and looking straight at the center of target_mes_
-  (genearte fake x and y axes for the orientation) and use that joint_space point as a sample. 
-
-2. find NN sample on the tree
-
-3. extend towards sample
-
-4. add extended edge to tree
-
-5. If the targets are in the beam generated by the tool, find the shortestpath from the start to that configuration and return it.
-  Otherwise, if we are in the VisualIK variant, check if the pose composed of the endeffector position looking straight at the target_mes_
-  (genearte fake x and y axes for the orientation) gets a ball visibility score of more than visibility_threshold_, call the visual IK solver,
-  specifically greedyOrientationVisualIK(), and if it gives a valid solution try to connect that joint_space point to the tree
-  and if you succeed get shortest path and return it. 
