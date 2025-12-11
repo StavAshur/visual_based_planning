@@ -244,10 +244,6 @@ public:
     // --- Configuration Getters/Setters ---
     void setRRTParams(const RRTParams& params) {
         rrt_params_ = params; 
-        ROS_ERROR("RRT params set to:");
-        ROS_ERROR("Goal bias: %f", rrt_params_.goal_bias);
-        ROS_ERROR("Max extension: %f", rrt_params_.max_extension);
-        ROS_ERROR("Max iterations: %d", rrt_params_.max_iterations);
     }
 
     void setPRMParams(const PRMParams& params) { prm_params_ = params; }
@@ -276,7 +272,16 @@ public:
         vis_integrity_->setLimitDiameterFactor(visibility_integrity_params_.limit_diameter_factor);
     }
 
-    void setStartJoints(const std::vector<double>& start) { start_joint_values_ = start; }
+    void setStartJoints(const std::vector<double>& start) {
+            start_joint_values_ = start; 
+            ROS_ERROR("Start joint values are [%f, %f, %f, %f, %f, %f]",
+                    start_joint_values_[0],
+                    start_joint_values_[1],
+                    start_joint_values_[2],
+                    start_joint_values_[3],
+                    start_joint_values_[4],
+                    start_joint_values_[5]);
+    }
     const std::vector<double>& getStartJoints() const { return start_joint_values_; }
 
     const std::vector<std::vector<double>>& getResultPath() const { return result_path_; }
@@ -459,7 +464,6 @@ public:
             // --- Step 5: Check Goal / Visual IK Connection ---
             
             // Check A: Direct Visibility
-            ROS_INFO("Direct visibility check:");
             double current_vis = vis_oracle_->checkBallBeamVisibility(q_new, target_mes_.center, target_mes_.radius);
             
             if (current_vis > visibility_threshold_) {
@@ -477,14 +481,12 @@ public:
                 robot_state_->update();
                 Eigen::Vector3d current_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
                 
-                ROS_INFO("Visibility check for VisualIK:");
                 // Check if this *position* is good
                 double potential_vis = vis_oracle_->checkBallBeamVisibility(
                     current_pos, 
                     target_mes_.center,
                     target_mes_.radius
                 );
-                ROS_INFO("Visibility score was %f.", potential_vis);
 
                 if (potential_vis > visibility_threshold_) {
                     // Try to snap

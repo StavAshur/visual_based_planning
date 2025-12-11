@@ -25,7 +25,7 @@ planner:
     beam_angle: 0.21
 
   # Post-Processing
-  enable_shortcutting: false
+  enable_shortcutting: true
 
   # RRT Specific Parameters
   rrt:
