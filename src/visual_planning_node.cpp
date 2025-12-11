@@ -61,6 +61,7 @@ public:
 
         // Load VI Params if enabled (or always, doesn't hurt)
         visual_planner::VisibilityIntegrityParams vi_params;
+        pnh_.param("planner/visibility_integrity/num_samples", vi_params.num_samples, 1000);
         pnh_.param("planner/visibility_integrity/vi_threshold", vi_params.vi_threshold, 0.7);
         pnh_.param("planner/visibility_integrity/k_neighbors", vi_params.k_neighbors, 5);
         pnh_.param("planner/visibility_integrity/limit_diameter_factor", vi_params.limit_diameter_factor, 2.0);

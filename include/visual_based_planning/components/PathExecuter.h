@@ -88,20 +88,42 @@ public:
             return false;
         }
 
-        // 4. Convert to ROS Message
-        moveit_msgs::RobotTrajectory trajectory_msg;
-        rt.getRobotTrajectoryMsg(trajectory_msg);
+        for (size_t i = 0; i < path.size(); ++i) {
+            move_group_->setJointValueTarget(path[i]);
+            
+            // Set speed scaling for this segment
+            move_group_->setMaxVelocityScalingFactor(velocity_scaling_);
+            move_group_->setMaxAccelerationScalingFactor(acceleration_scaling_);
 
-        // 5. Execute
-        ROS_INFO("PathExecuter: Sending trajectory to controller...");
-        moveit::planning_interface::MoveItErrorCode code = move_group_->execute(trajectory_msg);
+            moveit::planning_interface::MoveItErrorCode code = move_group_->move();
 
-        if (code == moveit::planning_interface::MoveItErrorCode::SUCCESS) {
-            ROS_INFO("PathExecuter: Execution successful.");
-            return true;
-        } else {
-            ROS_ERROR_STREAM("PathExecuter: Execution failed with error code: " << code);
-            return false;
+            if (code != moveit::planning_interface::MoveItErrorCode::SUCCESS) {
+                ROS_ERROR_STREAM("PathExecuter: Failed to move to waypoint " << i);
+                return false;
+            }
+            
+            // WAIT 2 SECONDS
+            ROS_INFO("Reached waypoint %lu. Waiting 2 seconds...", i);
+            ros::Duration(2.0).sleep();
         }
+        
+        ROS_INFO("PathExecuter: Execution successful.");
+        return true;
+
+        // // 4. Convert to ROS Message
+        // moveit_msgs::RobotTrajectory trajectory_msg;
+        // rt.getRobotTrajectoryMsg(trajectory_msg);
+
+        // // 5. Execute
+        // ROS_INFO("PathExecuter: Sending trajectory to controller...");
+        // moveit::planning_interface::MoveItErrorCode code = move_group_->execute(trajectory_msg);
+
+        // if (code == moveit::planning_interface::MoveItErrorCode::SUCCESS) {
+        //     ROS_INFO("PathExecuter: Execution successful.");
+        //     return true;
+        // } else {
+        //     ROS_ERROR_STREAM("PathExecuter: Execution failed with error code: " << code);
+        //     return false;
+        // }
     }
 };

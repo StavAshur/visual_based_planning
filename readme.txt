@@ -87,26 +87,31 @@ The order matters! The scene must be loaded after the service is launched.
 1. Locate the Configuration File: catkin_ws/src/visual_based_planning/config/planner_config.yaml
 
 2. Core Behavior Settings:
-  2.1 mode: Selects the planning algorithm. Set to "VisRRT" (Tree-based, good for single queries) or "VisPRM" (Graph-based, good for multiple queries).
-  2.2 use_visual_ik: Set to true to allow the planner to "snap" the tool orientation to face the target automatically (slower planning, higher success rate).
+  2.1 mode: Selects the planning algorithm. Set to "VisRRT" (Tree-based, good for single queries)
+    or "VisPRM" (Graph-based, good for multiple queries).
+  2.2 use_visual_ik: Set to true to allow the planner to "snap" the tool orientation to face the target automatically.
     Set false for standard random sampling.
-  2.3 enable_shortcutting: Set to true to post-process the path, removing unnecessary waypoints and creating smoother motion.
+  2.3 use_visibility_integrity: Set to true to create the visibility integrity data structure before running RRT/PRM.
+    Pre-processing time is long.
+  2.4 enable_shortcutting: Set to true to post-process the path, removing unnecessary waypoints and creating smoother motion.
+  2.5 workspace_bounds: Sets the environment bounding box for visibility integrity data structure and sampling 3D points. 
 
 3. Robot & Constraints:
   3.1 group_name: The MoveIt planning group to control (e.g., "manipulator").
   3.2 ee_link_name: The link name of the flashlight/camera (e.g., "tool0").
-  3.3 resolution: Step size for collision checking in radians (e.g., 0.05). Smaller is safer but slower.
-  3.4 visibility_threshold: Fraction of the target ball (0.0 to 1.0) that must be illuminated to consider the goal "reached".
+  3.3 resolution: Step size for collision checking in radians (suggested 0.05). Smaller is safer but slower.
+  3.4 visibility_threshold: Fraction of the target ball (0.0 to 1.0, suggested 0.8) that must be illuminated to consider the goal "reached".
 
 4. Algorithm Tuning (RRT):
-  4.1 rrt/goal_bias: Probability (0.0 - 1.0) of sampling the goal state directly. Higher values converge faster in open spaces.
+  4.1 rrt/goal_bias: Probability (0.0 - 1.0, suggested 0.01) of sampling the goal state directly. Higher values converge faster in open spaces.
   4.2 rrt/max_extension: Maximum distance (in joint space radians) the tree can grow in one step. Keep small (e.g., 0.1) for cluttered environments.
-  4.3 rrt/max_iterations: Maximum number of samples to try before reporting failure (e.g., 5000).
+  4.3 rrt/max_iterations: Maximum number of samples to try before reporting failure (suggested 5000).
 
-5. Execution Safety: DO NOT GO ABOVE 0.1!!!!!!!!!!!
-  5.1 execution/velocity_scaling: Global speed limit factor (e.g. 0.1 = 10% speed).
-  5.2 execution/acceleration_scaling: Global acceleration limit factor (e.g. 0.1 = 10% accel).
-
+5. Visibility Integrity Parameters:
+    5.1 visibility_integrity/num_samples: The number of valid points that will make up the data structure (1000 - fast, 5000 - takes time)
+    5.2 visibility_integrity/vi_threshold: Integrity threshold for visibility clusters (range 0.0 - 1.0, suggested 0.8). Higher value will create more, but more cohesive cluster. 
+    5.3 visibility_integrity/k_neighbors: Used to label query points and associate them with a cluster (suggested 5).
+    5.4 visibility_integrity/limit_diameter_factor: Higher value will create more clusters but smaller and more convex (suggested 2.0).
 
 =================================================================
 ========== Changes made in the Husky onboard computer ===========
@@ -125,7 +130,7 @@ Also added collision disables to /home/roblab22/catkin_ws/src/tau01_husky/tau01_
 <disable_collisions link1="ur_arm_wrist_3_link" link2="flashlight" reason="Adjacent" />
 <disable_collisions link1="flashlight" link2="light_beam" reason="Adjacent" />
 
-Some more collision disabling was added to the srdf file because the planning would not be perforned otherwise:
+Some more collision disabling was added to the srdf file because the planning would not be performed otherwise:
   <disable_collisions link1="base_link" link2="front_bumper_extension_link" reason="Adjacent" />
   <disable_collisions link1="base_link" link2="rear_bumper_extension_link" reason="Adjacent" />
   <disable_collisions link1="front_bumper_extension_link" link2="front_bumper_link" reason="Adjacent" />

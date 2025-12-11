@@ -48,6 +48,7 @@ struct PRMParams {
 };
 
 struct VisibilityIntegrityParams {
+    int num_samples = 1000;
     double vi_threshold = 0.7;
     int k_neighbors = 5;
     double limit_diameter_factor = 2.0;
@@ -124,7 +125,7 @@ public:
 
         // 3. Initialize Visibility Oracle
         vis_oracle_ = std::make_shared<VisibilityOracle>();
-        vis_integrity_ = std::make_shared<VisibilityIntegrity>();
+        
 
         // 4. Initialize Sampler
         sampler_ = std::make_shared<Sampler>(scene->getRobotModel());
@@ -154,14 +155,20 @@ public:
         // 7. Compute Target Enclosing Sphere
         computeTargetMES(targets);
 
-        // 8. Populate Visibility Oracle with Obstacles
-        updateObstaclesFromScene();
+        // 8. Initialize visibility integrity tool
+        vis_integrity_ = std::make_shared<VisibilityIntegrity>();
+        vis_integrity_->setSampler(sampler_);
+        vis_integrity_->setVisibilityOracle(vis_oracle_);
+
+        // 9. Populate Visibility Oracle with Obstacles and build visibility integrity tool
+        initialize_visibility();
+        
     }
 
     /**
      * @brief Extracts collision objects from the PlanningScene and adds them to VisibilityOracle.
      */
-    void updateObstaclesFromScene() {
+    void initialize_visibility() {
         if (!planning_scene_) return;
 
         // Get list of collision objects in the world
@@ -214,6 +221,11 @@ public:
                 // Add MESH support if needed later
             }
         }
+        
+        if(use_visibility_integrity_) {
+            setVisibilityIntegrityParams(visibility_integrity_params_);
+            vis_integrity_->build();
+        }
     }
 
     void setWorkspaceBounds(const BoundingBox& bounds) {
@@ -223,14 +235,21 @@ public:
 
     void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
         planning_scene_ = scene;
-        updateObstaclesFromScene();
+        initialize_visibility();
         validity_checker_->setPlanningScene(scene);
     }
 
     void setShortcutting(bool enable) { shortcutting_ = enable; }
 
     // --- Configuration Getters/Setters ---
-    void setRRTParams(const RRTParams& params) { rrt_params_ = params; }
+    void setRRTParams(const RRTParams& params) {
+        rrt_params_ = params; 
+        ROS_ERROR("RRT params set to:");
+        ROS_ERROR("Goal bias: %f", rrt_params_.goal_bias);
+        ROS_ERROR("Max extension: %f", rrt_params_.max_extension);
+        ROS_ERROR("Max iterations: %d", rrt_params_.max_iterations);
+    }
+
     void setPRMParams(const PRMParams& params) { prm_params_ = params; }
     
     void setVisibilityToolParams(const VisibilityOracle::VisibilityToolParams& params) {
@@ -252,6 +271,7 @@ public:
 
     void setVisibilityIntegrityParams(const VisibilityIntegrityParams& params) {
         visibility_integrity_params_ = params;
+        vis_integrity_->setNumSamples(visibility_integrity_params_.num_samples);
         vis_integrity_->setKNeighbors(visibility_integrity_params_.k_neighbors);
         vis_integrity_->setLimitDiameterFactor(visibility_integrity_params_.limit_diameter_factor);
     }
@@ -398,24 +418,26 @@ public:
             bool valid_sample = false;
 
             // --- Step 1: Sampling ---
-            // if (dist_01(rng_) > rrt_params_.goal_bias) {
-            //     // Uniform
-            //     q_rand = sampler_->sampleUniform();
-            //     valid_sample = true;
-            // } 
-            // else {
-            //     // Visibility-Biased (Delegated to Sampler)
-            //     if (sampler_->sampleVisibilityAwareState(sampling_radius, target_mes_, q_rand)) {
-            //         valid_sample = true;
-            //     } else {
-            //         q_rand = sampler_->sampleUniform();
-            //         valid_sample = true;
-            //     }
-            // }
+            if (dist_01(rng_) > rrt_params_.goal_bias) {
+                // Uniform
+                q_rand = sampler_->sampleUniform();
+                valid_sample = true;
+            } 
+            else {
+                if (use_visibility_integrity_) {
+                    Eigen::Vector3d goal_sample;
+                    if (vis_integrity_->SampleFromVisibilityRegion(target_mes_.center, q_rand))
+                        valid_sample = true;
+                }
+                else
+                    if (sampler_->sampleVisibilityAwareState(sampling_radius, target_mes_, q_rand)) {
+                    valid_sample = true;
+                } 
+            }
 
-            q_rand = sampler_->sampleUniform();
-            valid_sample = true;
-            if (!valid_sample) continue;
+            if (!valid_sample) {
+                q_rand = sampler_->sampleUniform();
+            }
 
             // --- Step 2: Nearest Neighbor ---
             std::vector<VertexDesc> nearest = nn_.kNearest(q_rand, 1);
@@ -514,6 +536,17 @@ public:
         } else {
             result_path_ = raw_path;
         }
+
+        if (raw_path.size() >= 2) {
+            for (size_t i = 0; i < raw_path.size() - 1; ++i) {
+                if (!validity_checker_->validateEdge(raw_path[i], raw_path[i+1])) {
+                    ROS_ERROR("VisualPlanner: Final path validation FAILED at edge %lu -> %lu. The path contains collision!", i, i+1);
+                    // Depending on policy, we might want to clear result_path_ or just warn.
+                    // For now, we warn but proceed to smoothing if enabled (which might fix or fail).
+                }
+            }
+        }
+
     }
 
 };

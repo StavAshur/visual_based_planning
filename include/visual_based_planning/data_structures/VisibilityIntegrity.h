@@ -59,6 +59,7 @@ private:
     // Map: Point Index -> Cluster ID
     std::vector<int> point_to_cluster_map_;
 
+    int num_samples_ = 1000;
     double vi_threshold_;
     double limit_diameter_factor_; 
     int k_neighbors_ = 5; // Default k for query
@@ -88,21 +89,25 @@ public:
         k_neighbors_ = k;
     }
 
+    void setNumSamples(int n) {
+        num_samples_ = n;
+    }
+
+    
+
     /**
      * @brief Main initialization function.
      */
-    void build(int num_points, double threshold = 0.7) {
+    void build() {
         if (!vis_oracle_ || !sampler_) {
-            std::cerr << "[VisibilityIntegrity] Error: Oracle or Sampler not set." << std::endl;
+            ROS_ERROR("[VisibilityIntegrity] Error: Oracle or Sampler not set.");
             return;
         }
-
-        vi_threshold_ = threshold;
         
         // 1. Sample Points
-        std::cout << "[VisibilityIntegrity] Sampling " << num_points << " valid points..." << std::endl;
+        std::cout << "[VisibilityIntegrity] Sampling " << num_samples_ << " valid points..." << std::endl;
         workspace_samples_.clear();
-        sampler_->sampleValidPoints(num_points, workspace_samples_);
+        sampler_->sampleValidPoints(num_samples_, workspace_samples_);
         
         // 2. Precompute Visibility between Samples (New Definition of Vis(p))
         std::cout << "[VisibilityIntegrity] Computing sample-to-sample visibility..." << std::endl;
@@ -169,7 +174,8 @@ public:
      * 4. Sample a valid point from that cluster's sphere.
      * 5. Verify sampled point sees input point.
      */
-    bool SampleFromVisibilityRegion(const Eigen::Vector3d& point, Eigen::Vector3d& sampled_point) {
+    bool SampleFromVisibilityRegion(const Eigen::Vector3d& point, std::vector<double>& sampled_point) {
+        ROS_WARN("Attempting sampling from visibility region...");
         // 1. Find cluster for the input point
         int start_cluster_id = query(point);
         if (start_cluster_id == -1) return false;
@@ -213,7 +219,8 @@ public:
 
             // 5. Verify Visibility: Candidate must see Input Point
             if (vis_oracle_->checkVisibility(candidate, point)) {
-                sampled_point = candidate;
+                sampled_point = {candidate[0], candidate[1], candidate[2]};
+                ROS_ERROR("Found point (%f, %f, %f) using VI", candidate[0], candidate[1], candidate[2]);
                 return true;
             }
         }

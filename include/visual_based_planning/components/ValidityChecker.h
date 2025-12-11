@@ -115,7 +115,7 @@ public:
     /**
      * @brief Validates the path segment between two configurations.
      */
-    bool validateEdge(const std::vector<double>& start, const std::vector<double>& end, visual_planner::EdgeCheckMode mode = visual_planner::EdgeCheckMode::BINARY_SEARCH) {
+    bool validateEdge(const std::vector<double>& start, const std::vector<double>& end, visual_planner::EdgeCheckMode mode = visual_planner::EdgeCheckMode::LINEAR) {
         if (!isValid(start) || !isValid(end)) return false;
 
         double dist = distance(start, end);

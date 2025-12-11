@@ -33,12 +33,12 @@ public:
 
         cost[0] = 0.0;
 
-        for (size_t i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i) {
             // If this node is unreachable, we can't extend from it
             if (cost[i] == std::numeric_limits<double>::infinity()) continue;
 
             // Look ahead to all future nodes
-            for (size_t j = i + 1; j < n; ++j) {
+            for (int j = i + 1; j < n; ++j) {
                 // Calculate distance
                 double segment_dist = validator_->distance(input_path[i], input_path[j]);
                 double new_cost = cost[i] + segment_dist;
@@ -49,6 +49,7 @@ public:
                 // Check if the shortcut is valid
                 if (validator_->validateEdge(input_path[i], input_path[j])) {
                     // We found a better path to j
+                    ROS_INFO("Found a short cut between nodes %d and %d in the path!", i, j);
                     cost[j] = new_cost;
                     parent[j] = i;
                 }
