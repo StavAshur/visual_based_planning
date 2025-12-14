@@ -6,6 +6,8 @@
 #include <algorithm>
 #include "ValidityChecker.h"
 
+namespace visual_planner {
+
 class PathSmoother {
 private:
     std::shared_ptr<ValidityChecker> validator_;
@@ -74,3 +76,5 @@ public:
         return smoothed_path;
     }
 };
+
+}; //namespace visual_planner

@@ -6,7 +6,8 @@ planner:
   # Planning Group & Links
   group_name: "manipulator"
   # ee_link_name: "ur_arm_tool0"
-  ee_link_name: "flashlight"
+  # ee_link_name: "flashlight"
+  ee_link_name: "light_beam"
 
   # # General Settings
   resolution: 0.01
@@ -41,7 +42,8 @@ planner:
   #   edge_validation_method: 1
 
   visibility_integrity:
-    num_samples: 5000
+    num_samples: 1000
     vi_threshold: 0.8
     k_neighbors: 5
     limit_diameter_factor: 2.0
+    face_samples: 10

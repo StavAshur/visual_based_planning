@@ -18,11 +18,16 @@ namespace bg = boost::geometry;
 typedef bg::model::point<double, 3, bg::cs::cartesian> Point3D;
 typedef bg::model::box<Point3D> Box3D;
 
+namespace visual_planner {
+
+
 class ValidityChecker {
 private:
     planning_scene::PlanningScenePtr planning_scene_;
 
     std::vector<Box3D> obstacles_;
+
+    BoundingBox workspace_bounds_;
 
     double resolution_; // Resolution in radians
 
@@ -48,6 +53,13 @@ public:
     void addObstacle(double min_x, double min_y, double min_z, double max_x, double max_y, double max_z) {
         Box3D b(Point3D(min_x, min_y, min_z), Point3D(max_x, max_y, max_z));
         obstacles_.push_back(b);
+    }
+
+    /**
+     * @brief Sets the workspace boundaries for point validation.
+     */
+    void setWorkspaceBounds(const BoundingBox& bounds) {
+        workspace_bounds_ = bounds;
     }
 
     /**
@@ -175,13 +187,13 @@ public:
     /**
      * @brief Validates the path segment between two configurations.
      */
-    bool validateEdge(const std::vector<double>& start, const std::vector<double>& end, visual_planner::EdgeCheckMode mode = visual_planner::EdgeCheckMode::LINEAR) {
+    bool validateEdge(const std::vector<double>& start, const std::vector<double>& end, EdgeCheckMode mode = EdgeCheckMode::LINEAR) {
         if (!isValid(start) || !isValid(end)) return false;
 
         double dist = distance(start, end);
         if (dist < 1e-6) return true;
 
-        if (mode == visual_planner::EdgeCheckMode::LINEAR) {
+        if (mode == EdgeCheckMode::LINEAR) {
             return validateEdgeLinear(start, end, dist);
         } else {
             return validateEdgeRecursive(start, end, dist);
@@ -253,6 +265,15 @@ public:
         return false;
     }
 
+    /**
+     * @brief Checks if a 3D point is within the defined workspace bounds.
+     */
+    bool isPointInWorkspace(double x, double y, double z) const {
+        return (x >= workspace_bounds_.x_min && x <= workspace_bounds_.x_max &&
+                y >= workspace_bounds_.y_min && y <= workspace_bounds_.y_max &&
+                z >= workspace_bounds_.z_min && z <= workspace_bounds_.z_max);
+    }
+
 private:
     bool validateEdgeLinear(const std::vector<double>& start, const std::vector<double>& end, double dist) {
         int steps = std::ceil(dist / resolution_);
@@ -275,6 +296,7 @@ private:
     }
 };
 
+}; //namespace visual_planner
 
 
 

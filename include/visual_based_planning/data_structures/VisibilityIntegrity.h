@@ -36,6 +36,8 @@ public:
         std::vector<int> visible_samples_union;        // Cached Union of Vis(p)
     };
 
+VisibilityIntegrityParams params_;
+
 private:
     std::shared_ptr<VisibilityOracle> vis_oracle_;
     
@@ -59,17 +61,18 @@ private:
     // Map: Point Index -> Cluster ID
     std::vector<int> point_to_cluster_map_;
 
-    int num_samples_ = 1000;
-    double vi_threshold_;
-    double limit_diameter_factor_; 
-    int k_neighbors_ = 5; // Default k for query
-    
+    // int params_.num_samples = 1000;
+    // double params_.vi_threshold;
+    // double params_.limit_diameter_factor; 
+    // int params_.k_neighbors = 5; // Default k for query
+    // int params_.face_samples = -1;
+
     std::shared_ptr<Sampler> sampler_; 
     std::mt19937 rng_;
 
 public:
     VisibilityIntegrity() 
-        : vi_threshold_(0.7), limit_diameter_factor_(2.0), rng_(std::random_device{}()) {}
+        : params_(), rng_(std::random_device{}()) {}
 
     void setVisibilityOracle(std::shared_ptr<VisibilityOracle> oracle) {
         vis_oracle_ = oracle;
@@ -79,21 +82,9 @@ public:
         sampler_ = sampler;
     }
 
-    // Removed setTargetPoints since targets are no longer used for VI definition
-    
-    void setLimitDiameterFactor(double factor) {
-        limit_diameter_factor_ = factor;
+    void setParams(const VisibilityIntegrityParams& params) {
+        params_ = params;
     }
-    
-    void setKNeighbors(int k) {
-        k_neighbors_ = k;
-    }
-
-    void setNumSamples(int n) {
-        num_samples_ = n;
-    }
-
-    
 
     /**
      * @brief Main initialization function.
@@ -105,9 +96,9 @@ public:
         }
         
         // 1. Sample Points
-        std::cout << "[VisibilityIntegrity] Sampling " << num_samples_ << " valid points..." << std::endl;
+        std::cout << "[VisibilityIntegrity] Sampling " << params_.num_samples << " valid points..." << std::endl;
         workspace_samples_.clear();
-        sampler_->sampleValidPoints(num_samples_, workspace_samples_);
+        sampler_->sampleValidPoints(params_.num_samples, workspace_samples_, params_.face_samples);
         
         // 2. Precompute Visibility between Samples (New Definition of Vis(p))
         std::cout << "[VisibilityIntegrity] Computing sample-to-sample visibility..." << std::endl;
@@ -140,7 +131,7 @@ public:
         std::vector<double> q_vec = {query_point.x(), query_point.y(), query_point.z()};
         
         // Get K nearest points
-        std::vector<VertexDesc> neighbors = point_nn_.kNearest(q_vec, k_neighbors_);
+        std::vector<VertexDesc> neighbors = point_nn_.kNearest(q_vec, params_.k_neighbors);
         if (neighbors.empty()) return -1;
 
         // Vote for cluster
@@ -292,14 +283,14 @@ private:
                 double dist = (workspace_samples_[curr_idx] - p_first).norm();
 
                 if (c.member_indices.size() >= 10 && max_dist_to_first > 1e-6) {
-                    if (dist > limit_diameter_factor_ * max_dist_to_first) {
+                    if (dist > params_.limit_diameter_factor * max_dist_to_first) {
                         break; 
                     }
                 }
 
                 double score = calculateVI_Incremental(c, vis_cache_[curr_idx]);
 
-                if (score >= vi_threshold_) {
+                if (score >= params_.vi_threshold) {
                     c.member_indices.push_back(curr_idx);
                     point_to_cluster_map_[curr_idx] = c.id; // Map
                     

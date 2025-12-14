@@ -61,7 +61,7 @@ public:
     /**
      * @brief Adds an AABB obstacle to the oracle.
      */
-    void addObstacle(double min_x, double min_y, double min_z, double max_x, double max_y, double max_z, int id) {
+    void addObstacle(double min_x, double min_y, double min_z, double max_x, double max_y, double max_z) {
         Box3D b(Point3D(min_x, min_y, min_z), Point3D(max_x, max_y, max_z));
         obstacles_.push_back(b);
     }

@@ -19,6 +19,15 @@
 #include "ValidityChecker.h"
 #include "VisualIK.h"
 
+#include <boost/geometry.hpp>
+#include <boost/geometry/geometries/point.hpp>
+#include <boost/geometry/geometries/box.hpp>
+
+namespace bg = boost::geometry;
+
+// Define Types to match framework
+typedef bg::model::point<double, 3, bg::cs::cartesian> Point3D;
+typedef bg::model::box<Point3D> Box3D;
 
 namespace visual_planner {
 
@@ -34,6 +43,7 @@ private:
 
     double visibility_threshold_ = 0.8;
     BoundingBox workspace_bounds_;
+    std::vector<Box3D> obstacles_;
 
     std::string group_name_ = "tool0";
 
@@ -67,6 +77,12 @@ public:
         group_name_ = group; 
     }
 
+    void addObstacle(double min_x, double min_y, double min_z, double max_x, double max_y, double max_z) {
+        Box3D b(Point3D(min_x, min_y, min_z), Point3D(max_x, max_y, max_z));
+        obstacles_.push_back(b);
+    }
+
+
     std::vector<double> sampleUniform() {
         robot_state_->setToRandomPositions();
         std::vector<double> values;
@@ -74,18 +90,86 @@ public:
         return values;
     }
 
+
     /**
      * @brief Samples num_points valid 3D points from the workspace.
      * Populates the provided vector to avoid copying.
+     * * @param num_points Number of random workspace samples to generate.
+     * @param out_points Vector to append points to.
+     * @param face_samples (Optional) If > 0, samples this many points from each face of every obstacle.
      */
-    void sampleValidPoints(int num_points, std::vector<Eigen::Vector3d>& out_points) {
+    void sampleValidPoints(int num_points, std::vector<Eigen::Vector3d>& out_points, int face_samples = -1) {
+        int valid_count = 0;
+        out_points.reserve(num_points);
 
+        // --- 1. Face Sampling (New Logic) ---
+        if (face_samples > 0 && !obstacles_.empty()) {
+            double epsilon = 0.005; // 5mm offset to push away from surface
+            std::uniform_real_distribution<double> dist_01(0.0, 1.0);
+
+            // Reserve approximate memory to prevent reallocations
+            // (Current size + random points + max potential face points)
+            out_points.reserve(out_points.size() + num_points + (obstacles_.size() * 6 * face_samples));
+
+            for (const auto& obs : obstacles_) {
+                // Access Box Coordinates using Boost Geometry
+                double min_x = obs.min_corner().get<0>();
+                double min_y = obs.min_corner().get<1>();
+                double min_z = obs.min_corner().get<2>();
+                double max_x = obs.max_corner().get<0>();
+                double max_y = obs.max_corner().get<1>();
+                double max_z = obs.max_corner().get<2>();
+                
+                // Lambda to validate and add a point
+                auto try_add_point = [&](double x, double y, double z) {
+                    if (validity_checker_->isPointInWorkspace(x, y, z) && 
+                        !validity_checker_->isPointInObstacle(x, y, z)) {
+                        out_points.emplace_back(x, y, z);
+                        valid_count++;
+                    }
+                };
+
+                double u;
+                double v;
+                for (int i = 0; i < face_samples; ++i) {
+                    // Face -X (Left) -> push left (-epsilon)
+                    u = dist_01(rng_);
+                    v = dist_01(rng_);
+                    try_add_point(min_x - epsilon, min_y + u*(max_y-min_y), min_z + v*(max_z-min_z));
+
+                    // Face +X (Right) -> push right (+epsilon)
+                    u = dist_01(rng_);
+                    v = dist_01(rng_);
+                    try_add_point(max_x + epsilon, min_y + u*(max_y-min_y), min_z + v*(max_z-min_z));
+
+                    // Face -Y (Front) -> push back (-epsilon)
+                    u = dist_01(rng_);
+                    v = dist_01(rng_);
+                    try_add_point(min_x + u*(max_x-min_x), min_y - epsilon, min_z + v*(max_z-min_z));
+                    
+                    // Face +Y (Back) -> push forward (+epsilon)
+                    u = dist_01(rng_);
+                    v = dist_01(rng_);
+                    try_add_point(min_x + u*(max_x-min_x), max_y + epsilon, min_z + v*(max_z-min_z));
+
+                    // Face -Z (Bottom) -> push down (-epsilon)
+                    u = dist_01(rng_);
+                    v = dist_01(rng_);
+                    try_add_point(min_x + u*(max_x-min_x), min_y + v*(max_y-min_y), min_z - epsilon);
+
+                    // Face +Z (Top) -> push up (+epsilon)
+                    u = dist_01(rng_);
+                    v = dist_01(rng_);
+                    try_add_point(min_x + u*(max_x-min_x), min_y + v*(max_y-min_y), max_z + epsilon);
+                }
+            }
+        }
+
+        // --- 2. Uniform Workspace Sampling 
         std::uniform_real_distribution<double> dist_x(workspace_bounds_.x_min, workspace_bounds_.x_max);
         std::uniform_real_distribution<double> dist_y(workspace_bounds_.y_min, workspace_bounds_.y_max);
         std::uniform_real_distribution<double> dist_z(workspace_bounds_.z_min, workspace_bounds_.z_max);
 
-        out_points.reserve(out_points.size() + num_points);
-        int valid_count = 0;
         int attempts = 0;
         int max_attempts = num_points * 100; // Safety break
 

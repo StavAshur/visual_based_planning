@@ -35,24 +35,6 @@ namespace visual_planner {
 
 // --- Parameter Structs ---
 
-struct RRTParams {
-    double goal_bias = std::pow(0.5, 7);         
-    double max_extension = 0.1;      
-    int max_iterations = 5000;       
-};
-
-struct PRMParams {
-    int num_neighbors = 10;          
-    int num_samples = 1000;          
-    EdgeCheckMode edge_validation_method = EdgeCheckMode::BINARY_SEARCH;
-};
-
-struct VisibilityIntegrityParams {
-    int num_samples = 1000;
-    double vi_threshold = 0.7;
-    int k_neighbors = 5;
-    double limit_diameter_factor = 2.0;
-};
 
 class VisualPlanner {
 private:
@@ -151,6 +133,7 @@ public:
 
         workspace_bounds_ = {-2.0, 2.0, -2.0, 2.0, -0.5, 3.5};
         sampler_->setWorkspaceBounds(workspace_bounds_);
+        validity_checker_->setWorkspaceBounds(workspace_bounds_);
 
         // 7. Compute Target Enclosing Sphere
         computeTargetMES(targets);
@@ -206,15 +189,16 @@ public:
                     y_min = center.y() - hy; y_max = center.y() + hy;
                     z_min = center.z() - hz; z_max = center.z() + hz;
                     
-                    vis_oracle_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max, i);
+                    vis_oracle_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max);
                     validity_checker_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max);
+                    sampler_->addObstacle(x_min, y_min, z_min, x_max, y_max, z_max);
                 } 
                 else if (obj->shapes_[i]->type == shapes::SPHERE) {
                     const shapes::Sphere* sphere = static_cast<const shapes::Sphere*>(obj->shapes_[i].get());
                     Eigen::Vector3d center = shape_pose.translation();
                     double r = sphere->radius;
                     vis_oracle_->addObstacle(center.x()-r, center.y()-r, center.z()-r, 
-                                             center.x()+r, center.y()+r, center.z()+r, i);
+                                             center.x()+r, center.y()+r, center.z()+r);
                     validity_checker_->addObstacle(center.x()-r, center.y()-r, center.z()-r,
                                                    center.x()+r, center.y()+r, center.z()+r);
                 }
@@ -230,7 +214,9 @@ public:
 
     void setWorkspaceBounds(const BoundingBox& bounds) {
         workspace_bounds_ = bounds;
-        if (sampler_) sampler_->setWorkspaceBounds(bounds);
+        sampler_->setWorkspaceBounds(bounds);
+        validity_checker_->setWorkspaceBounds(bounds);
+
     }
 
     void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
@@ -267,20 +253,11 @@ public:
 
     void setVisibilityIntegrityParams(const VisibilityIntegrityParams& params) {
         visibility_integrity_params_ = params;
-        vis_integrity_->setNumSamples(visibility_integrity_params_.num_samples);
-        vis_integrity_->setKNeighbors(visibility_integrity_params_.k_neighbors);
-        vis_integrity_->setLimitDiameterFactor(visibility_integrity_params_.limit_diameter_factor);
+        vis_integrity_->setParams(params);
     }
 
     void setStartJoints(const std::vector<double>& start) {
             start_joint_values_ = start; 
-            ROS_ERROR("Start joint values are [%f, %f, %f, %f, %f, %f]",
-                    start_joint_values_[0],
-                    start_joint_values_[1],
-                    start_joint_values_[2],
-                    start_joint_values_[3],
-                    start_joint_values_[4],
-                    start_joint_values_[5]);
     }
     const std::vector<double>& getStartJoints() const { return start_joint_values_; }
 

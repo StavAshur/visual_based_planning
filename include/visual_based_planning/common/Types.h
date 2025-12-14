@@ -21,6 +21,26 @@ namespace visual_planner {
         double z_min, z_max;
     };
 
+    struct RRTParams {
+        double goal_bias = std::pow(0.5, 7);         
+        double max_extension = 0.1;      
+        int max_iterations = 5000;       
+    };
+
+    struct PRMParams {
+        int num_neighbors = 10;          
+        int num_samples = 1000;          
+        EdgeCheckMode edge_validation_method = EdgeCheckMode::BINARY_SEARCH;
+    };
+
+    struct VisibilityIntegrityParams {
+        int num_samples = 1000;
+        double vi_threshold = 0.7;
+        int k_neighbors = 5;
+        double limit_diameter_factor = 2.0;
+        int face_samples = -1;
+    };
+    
 } // namespace visual_planner
 
 

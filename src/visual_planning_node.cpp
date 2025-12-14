@@ -65,6 +65,7 @@ public:
         pnh_.param("planner/visibility_integrity/vi_threshold", vi_params.vi_threshold, 0.7);
         pnh_.param("planner/visibility_integrity/k_neighbors", vi_params.k_neighbors, 5);
         pnh_.param("planner/visibility_integrity/limit_diameter_factor", vi_params.limit_diameter_factor, 2.0);
+        pnh_.param("planner/visibility_integrity/face_samples", vi_params.face_samples, -1);
         planner_->setVisibilityIntegrityParams(vi_params);
 
         double resolution;
