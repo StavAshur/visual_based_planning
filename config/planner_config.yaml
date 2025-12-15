@@ -1,7 +1,7 @@
 planner:
   mode: "VisRRT" # "VisRRT" or "VisPRM"
-  use_visual_ik: true
-  use_visibility_integrity: true
+  use_visual_ik: false
+  use_visibility_integrity: false
 
   # Planning Group & Links
   group_name: "manipulator"
@@ -11,7 +11,7 @@ planner:
 
   # # General Settings
   resolution: 0.01
-  visibility_threshold: 0.8
+  visibility_threshold: 0.99
   workspace_bounds:
     x_min: -1.0
     x_max: 1.0

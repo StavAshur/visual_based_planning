@@ -171,7 +171,7 @@ public:
         int start_cluster_id = query(point);
         if (start_cluster_id == -1) return false;
 
-        // 2. Get neighbor clusters (including self if self-visible)
+        // 2. Get neighbor clusters 
         const std::vector<int>& candidate_clusters = cluster_vis_graph_[start_cluster_id];
         
         if (candidate_clusters.empty()) return false;
@@ -211,6 +211,97 @@ public:
             // 5. Verify Visibility: Candidate must see Input Point
             if (vis_oracle_->checkVisibility(candidate, point)) {
                 sampled_point = {candidate[0], candidate[1], candidate[2]};
+                ROS_ERROR("Found point (%f, %f, %f) using VI", candidate[0], candidate[1], candidate[2]);
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+
+
+    /**
+     * @brief Samples a point from the visibility region of the cluster containing 'ball'.
+     * 1. Classify 'ball' to find its cluster C by sampling 10 points and majority voting.
+     * 2. Get neighbor clusters N_VG(C) from cluster visibility graph.
+     * 3. Select one cluster from N_VG(C) via weighted sampling (size-based).
+     * 4. Sample a valid point from that cluster's sphere.
+     * 5. Verify sampled point sees input ball's center.
+     */
+    bool SampleFromVisibilityRegion(const Ball& ball, Eigen::Vector3d& sampled_point, double visibility_threshold) {
+        ROS_WARN("Attempting sampling from visibility region...");
+        // 1. Find cluster for the input ball using majority vote
+        std::map<int, int> cluster_votes;
+        std::uniform_real_distribution<double> dist_ball(-1.0, 1.0);
+        int ball_samples = 10;
+
+        for (int i = 0; i < ball_samples; ++i) {
+            Eigen::Vector3d offset;
+            do {
+                offset = Eigen::Vector3d(dist_ball(rng_), dist_ball(rng_), dist_ball(rng_));
+            } while (offset.squaredNorm() > 1.0);
+            
+            Eigen::Vector3d sample_in_ball = ball.center + offset * ball.radius;
+            int cid = query(sample_in_ball);
+            if (cid != -1) {
+                cluster_votes[cid]++;
+            }
+        }
+
+        if (cluster_votes.empty()) return false;
+
+        int start_cluster_id = -1;
+        int max_votes = -1;
+        for (const auto& pair : cluster_votes) {
+            if (pair.second > max_votes) {
+                max_votes = pair.second;
+                start_cluster_id = pair.first;
+            }
+        }
+
+        if (start_cluster_id == -1) return false;
+
+        // 2. Get neighbor clusters
+        const std::vector<int>& candidate_clusters = cluster_vis_graph_[start_cluster_id];
+        
+        if (candidate_clusters.empty()) return false;
+
+        // 3. Weighted Sampling based on cluster size
+        std::vector<double> weights;
+        double total_weight = 0.0;
+        for (int cid : candidate_clusters) {
+            if (cid >= clusters_.size()) continue;
+            double w = static_cast<double>(clusters_[cid].size_);
+            weights.push_back(w);
+            total_weight += w;
+        }
+
+        if (total_weight == 0.0) return false;
+
+        std::discrete_distribution<> d(weights.begin(), weights.end());
+        
+        // 4. Sample Loop
+        int max_attempts = 100;
+        std::uniform_real_distribution<double> dist(-1.0, 1.0);
+
+        for (int i = 0; i < max_attempts; ++i) {
+            // Pick a cluster
+            int chosen_idx = d(rng_);
+            int chosen_cluster_id = candidate_clusters[chosen_idx];
+            const Cluster& chosen_cluster = clusters_[chosen_cluster_id];
+
+            // Sample from sphere
+            Eigen::Vector3d offset;
+            do {
+                offset = Eigen::Vector3d(dist(rng_), dist(rng_), dist(rng_));
+            } while (offset.squaredNorm() > 1.0);
+
+            Eigen::Vector3d candidate = chosen_cluster.center + offset * chosen_cluster.radius;
+
+            // 5. Verify Visibility: Candidate must see Input Ball Center
+            if (vis_oracle_->checkBallBeamVisibility(candidate, ball) > visibility_threshold) {
+                sampled_point = candidate;
                 ROS_ERROR("Found point (%f, %f, %f) using VI", candidate[0], candidate[1], candidate[2]);
                 return true;
             }
@@ -336,7 +427,7 @@ private:
         int checks_per_pair = 10; 
 
         for (size_t i = 0; i < clusters_.size(); ++i) {
-            cluster_vis_graph_[i].push_back(i); // Assume cluster sees itself usually
+            // cluster_vis_graph_[i].push_back(i); // Assume cluster sees itself usually
             
             for (size_t j = i + 1; j < clusters_.size(); ++j) {
                 bool connected = false;

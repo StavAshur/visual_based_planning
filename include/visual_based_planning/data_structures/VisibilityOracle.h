@@ -8,6 +8,8 @@
 #include <functional>
 #include <random>
 
+#include "../common/Types.h"
+
 // Eigen for 3D Math
 #include <Eigen/Geometry>
 #include <Eigen/Dense>
@@ -24,6 +26,8 @@ namespace bg = boost::geometry;
 typedef bg::model::point<double, 3, bg::cs::cartesian> Point3D;
 typedef bg::model::box<Point3D> Box3D;
 typedef bg::model::segment<Point3D> Segment3D;
+
+namespace visual_planner {
 
 class VisibilityOracle {
 public:
@@ -232,6 +236,11 @@ public:
         return checkBallBeamVisibility(pose, center, radius);
     }
 
+    double checkBallBeamVisibility(const Eigen::Vector3d source, const Ball b) {
+
+        return checkBallBeamVisibility(source, b.center, b.radius);
+    }
+
     /**
      * @brief Checks if the segment between p1 and p2 is visible (not blocked).
      * Uses the method selected via setMethod() (Default: BF).
@@ -343,3 +352,5 @@ private:
         throw std::runtime_error("KDTree visibility check is not implemented.");
     }
 };
+
+} // namespace visual_planner

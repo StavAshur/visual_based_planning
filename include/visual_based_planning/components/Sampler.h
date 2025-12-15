@@ -97,8 +97,9 @@ public:
      * * @param num_points Number of random workspace samples to generate.
      * @param out_points Vector to append points to.
      * @param face_samples (Optional) If > 0, samples this many points from each face of every obstacle.
+     * @return true if succeeded
      */
-    void sampleValidPoints(int num_points, std::vector<Eigen::Vector3d>& out_points, int face_samples = -1) {
+    bool sampleValidPoints(int num_points, std::vector<Eigen::Vector3d>& out_points, int face_samples = -1) {
         int valid_count = 0;
         out_points.reserve(num_points);
 
@@ -184,6 +185,8 @@ public:
             }
             attempts++;
         }
+
+        return (valid_count == num_points);
     }
 
     // --- Helpers ---

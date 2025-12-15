@@ -153,4 +153,8 @@ public:
 
         return path;
     }
+
+    void clear() {
+        G_.clear();
+    }
 };

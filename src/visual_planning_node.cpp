@@ -50,6 +50,8 @@ public:
         bool use_vis_ik;
         pnh_.param<bool>("planner/use_visual_ik", use_vis_ik, false); 
         planner_->setUseVisualIK(use_vis_ik);
+        ROS_WARN("Set use_visual_ik to value: %d", use_vis_ik);
+
 
         double vis_thresh;
         pnh_.param<double>("planner/visibility_threshold", vis_thresh, 0.8);

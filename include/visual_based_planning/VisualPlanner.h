@@ -243,7 +243,10 @@ public:
         if (sampler_) sampler_->setVisibilityThreshold(t);
     }
 
-    void setUseVisualIK(bool use) { use_visual_ik_ = use; }
+    void setUseVisualIK(bool use) {
+        use_visual_ik_ = use; 
+        ROS_WARN("Set use_visual_ik to value: %d", use);
+        }
     bool getUseVisualIK() const { return use_visual_ik_; }
 
 
@@ -313,7 +316,7 @@ public:
 
     void reset() {
         nn_.clear();
-        // graph_.clear(); 
+        graph_.clear(); 
     }
 
     void computeTargetMES(const std::vector<geometry_msgs::Point>& targets) {
@@ -385,7 +388,7 @@ public:
         robot_state_->update();
         Eigen::Vector3d start_ee = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
         
-        double sampling_radius = (target_mes_.center - start_ee).norm() * 2.0;
+        double sampling_radius = (target_mes_.center - start_ee).norm() * 0.5;
         
         std::uniform_real_distribution<double> dist_01(0.0, 1.0);
 
@@ -411,10 +414,10 @@ public:
                     if (vis_integrity_->SampleFromVisibilityRegion(target_mes_.center, q_rand))
                         valid_sample = true;
                 }
-                else
-                    if (sampler_->sampleVisibilityAwareState(sampling_radius, target_mes_, q_rand)) {
-                    valid_sample = true;
-                } 
+                // else
+                //     if (sampler_->sampleVisibilityAwareState(sampling_radius, target_mes_, q_rand)) {
+                //     valid_sample = true;
+                // } 
             }
 
             if (!valid_sample) {
@@ -447,7 +450,7 @@ public:
                 ROS_INFO("VisRRT: Found solution via direct visibility.");
                 std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, q_new_id);
                 result_path_.clear();
-                for (auto v : path_idx) result_path_.push_back(graph_.getVertexConfig(v));
+                finalizePath(root_id, q_new_id);
                 return true;
             }
 
@@ -480,7 +483,6 @@ public:
                                 ROS_INFO("VisRRT: Found solution via VisualIK snap.");
                                 std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, goal_id);
                                 result_path_.clear();
-                                // for (auto v : path_idx) result_path_.push_back(graph_.getVertexConfig(v));
                                 finalizePath(root_id, goal_id);
                                 return true;
                             }
@@ -494,9 +496,108 @@ public:
         return false;
     }
 
+    // ========================================================================
+    // 4. PRM Implementation
+    // ========================================================================
+
     bool planVisPRM() {
-        ROS_INFO("VisPRM placeholder called");
-        return true;
+        
+        if (start_joint_values_.empty()) { ROS_ERROR("Start joint values not set!"); return false; }
+        
+        // 1. Add Start Configuration
+        VertexDesc root_id = addState(start_joint_values_);
+        if (root_id == -1) { ROS_ERROR("Start state is invalid!"); return false; }
+
+        robot_state_->setJointGroupPositions(group_name_, start_joint_values_);
+        robot_state_->update();
+        Eigen::Vector3d start_ee = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
+        
+        std::vector<VertexDesc> goal_ids;
+
+        ROS_INFO("Starting VisPRM...");
+
+        int max_iterations = 100; // Outer loop limit to avoid infinite run
+        for (int iter = 0; iter < max_iterations; ++iter) {
+            
+            // 2.1 Sample Goal Configuration
+            std::vector<double> q_goal;
+            bool found_goal_sample = false;
+
+            if (use_visibility_integrity_) {
+
+                Eigen::Vector3d p_sample;
+                if (vis_integrity_->SampleFromVisibilityRegion(target_mes_, p_sample, visibility_threshold_)) {
+                    // Convert 3D point to Joint Config using Greedy Orientation IK
+                    // We need to look at the target center
+                    Eigen::Matrix3d look_at_rot = sampler_->computeLookAtRotation(p_sample, target_mes_.center);
+                    std::vector<geometry_msgs::Point> dummy_targets;
+                    geometry_msgs::Point p; p.x=target_mes_.center.x(); p.y=target_mes_.center.y(); p.z=target_mes_.center.z();
+                    dummy_targets.push_back(p);
+                    
+                    double standoff = (target_mes_.center - p_sample).norm();
+                    std::vector<double> seed_ik = sampler_->sampleUniform(); // Random seed for IK
+                    
+                    if (vis_ik_->solveIKWithOrientation(seed_ik, dummy_targets, look_at_rot, q_goal)) {
+                        found_goal_sample = true;
+                    }
+                }
+            } else {
+                // Standard Sampling until visible
+                if (sampler_->sampleValidPoints(1, q_goal)) {
+                    found_goal_sample = true;
+                }
+            }
+
+            if (found_goal_sample) {
+                VertexDesc g_id = addState(q_goal);
+                if (g_id != -1) {
+                    goal_ids.push_back(g_id);
+                    // Connect to k-NN
+                    std::vector<VertexDesc> neighbors = nn_.kNearest(q_goal, prm_params_.num_neighbors);
+                    for (auto n_id : neighbors) {
+                        if (n_id == g_id) continue;
+                        std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
+                        if (validateEdge(q_goal, q_neighbor, prm_params_.edge_validation_method)) {
+                            graph_.addEdge(g_id, n_id, distance(q_goal, q_neighbor));
+                        }
+                    }
+                }
+            }
+
+            // 2.2 Check for Path
+            for (auto g_id : goal_ids) {
+                // Check if start is connected to this goal
+                // We use BFS or Dijkstra. Dijkstra is already available.
+                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, g_id);
+                if (!path_idx.empty()) {
+                    ROS_INFO("VisPRM: Found solution!");
+                    finalizePath(root_id, g_id);
+                    return true;
+                }
+            }
+
+            // 2.3 Expand Roadmap
+            ROS_INFO("VisPRM: Expanding roadmap (Iter %d)...", iter);
+            for (int i = 0; i < prm_params_.num_samples; ++i) {
+                std::vector<double> q_rand = sampler_->sampleUniform();
+                if (validity_checker_->isValid(q_rand)) {
+                    VertexDesc v_id = addState(q_rand);
+                    if (v_id != -1) {
+                        std::vector<VertexDesc> neighbors = nn_.kNearest(q_rand, prm_params_.num_neighbors);
+                        for (auto n_id : neighbors) {
+                            if (n_id == v_id) continue;
+                            std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
+                            if (validateEdge(q_rand, q_neighbor, prm_params_.edge_validation_method)) {
+                                graph_.addEdge(v_id, n_id, distance(q_rand, q_neighbor));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ROS_WARN("VisPRM: Max iterations reached without solution.");
+        return false;
     }
 
     // Helper to extract and smooth path
