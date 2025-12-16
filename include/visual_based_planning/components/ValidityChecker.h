@@ -87,14 +87,15 @@ public:
         collision_detection::CollisionResult res;
         planning_scene_->checkCollision(req, res, state);
         
-        if (res.collision) {
-            ROS_WARN_THROTTLE(1.0, "State is INVALID!");
-            for (const auto& contact : res.contacts) {
-                // contact.first is a pair of strings (body_name_1, body_name_2)
-                ROS_WARN("Collision between: '%s' and '%s'", 
-                         contact.first.first.c_str(), contact.first.second.c_str());
-            }
-        }
+        /// @todo nice debug output
+        // if (res.collision) {
+        //     ROS_WARN_THROTTLE(1.0, "State is INVALID!");
+        //     for (const auto& contact : res.contacts) {
+        //         // contact.first is a pair of strings (body_name_1, body_name_2)
+        //         ROS_WARN("Collision between: '%s' and '%s'", 
+        //                  contact.first.first.c_str(), contact.first.second.c_str());
+        //     }
+        // }
         
         return !res.collision;
     }

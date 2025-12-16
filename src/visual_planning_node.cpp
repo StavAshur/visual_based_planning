@@ -104,7 +104,7 @@ public:
 
 
         // 2. Visibility Tool Params
-        VisibilityOracle::VisibilityToolParams visibility_tool_params; 
+        visual_planner::VisibilityOracle::VisibilityToolParams visibility_tool_params; 
         pnh_.param("planner/visibility_tool_params/beam_length", visibility_tool_params.beam_length, visibility_tool_params.beam_length);
         pnh_.param("planner/visibility_tool_params/beam_angle", visibility_tool_params.beam_angle, visibility_tool_params.beam_angle);
 
@@ -140,15 +140,19 @@ public:
         
         ROS_WARN("Received planning request.");
         
-        // 1. UPDATE SCENE: Get a fresh snapshot from the monitor
         planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
-        planning_scene::PlanningScenePtr fresh_scene = ls->diff();
-        
-        // Pass this fresh scene to the planner to update obstacles
-        planner_->setPlanningScene(fresh_scene);
 
-        // 2. Pass Targets to Planner
-        planner_->computeTargetMES(req.task.target_points);
+        if (!planner_->isInitialized()) {
+
+            // 1. UPDATE SCENE: Get a fresh snapshot from the monitor
+            planning_scene::PlanningScenePtr fresh_scene = ls->diff();
+            
+            // Pass this fresh scene to the planner to update obstacles
+            planner_->setPlanningScene(fresh_scene);
+
+            // 2. Pass Targets to Planner
+            planner_->computeTargetMES(req.task.target_points);
+        }
 
         // 3. Pass Start State
         if (!req.task.start_joints.empty()) {
@@ -171,6 +175,8 @@ public:
         if (!req.planner_type.empty()) {
              mode = req.planner_type;
         }
+
+        ROS_ERROR("Planner mode is %s", mode.c_str());
 
         // 5. Execute Planning
         bool success = false;

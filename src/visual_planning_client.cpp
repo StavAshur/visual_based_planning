@@ -38,7 +38,7 @@ int main(int argc, char** argv)
   }
   
   std::string planner_type;
-  pnh.param<std::string>("planner_type", planner_type, "VisRRT"); // Default to RRT
+  // pnh.param<std::string>("planner_type", planner_type, "VisRRT"); // Default to RRT
 
   // 3. Load Targets from YAML
   YAML::Node config;
@@ -56,7 +56,7 @@ int main(int argc, char** argv)
 
   // 4. Prepare Request
   visual_based_planning::PlanVisibilityPath srv;
-  srv.request.planner_type = planner_type;
+  // srv.request.planner_type = planner_type;
 
   YAML::Node pts = config["target_points"];
   for (std::size_t i = 0; i < pts.size(); ++i) {

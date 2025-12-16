@@ -45,6 +45,7 @@ private:
     bool shortcutting_;
     bool use_visual_ik_;
     bool use_visibility_integrity_;
+    bool is_initialized_ = false;
     VisibilityIntegrityParams visibility_integrity_params_;
 
     Ball target_mes_; // Moved to top-level state
@@ -145,7 +146,7 @@ public:
 
         // 9. Populate Visibility Oracle with Obstacles and build visibility integrity tool
         initialize_visibility();
-        
+
     }
 
     /**
@@ -210,6 +211,7 @@ public:
             setVisibilityIntegrityParams(visibility_integrity_params_);
             vis_integrity_->build();
         }
+
     }
 
     void setWorkspaceBounds(const BoundingBox& bounds) {
@@ -223,6 +225,8 @@ public:
         planning_scene_ = scene;
         initialize_visibility();
         validity_checker_->setPlanningScene(scene);
+        is_initialized_ = true;
+
     }
 
     void setShortcutting(bool enable) { shortcutting_ = enable; }
@@ -288,6 +292,7 @@ public:
     std::string getGroupName() const { return group_name_; }
     std::string getEELinkName() const { return ee_link_name_; }
 
+    bool isInitialized() const { return is_initialized_; }
 
     // ========================================================================
     // 1. Core Primitives
@@ -524,14 +529,15 @@ public:
                     found_goal_sample = true;
                 }
             }
-            } else {
+            else {
                 for (int i = 0; i < 100; i++) {
                     q_goal = sampler_->sampleUniform();
-                    if (validity_checker_->isValid(q_goal))
-                        if (double checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
+                    if (validity_checker_->isValid(q_goal)) {
+                        if (vis_oracle_->checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
                             found_goal_sample = true;
                             break;
                         }
+                    }
                 }
             }
 
@@ -588,10 +594,6 @@ public:
     }
 
 
-
-
-
-
     bool sampleVisibilityGoal(std::vector<double>& res_sample) {
 
         Eigen::Vector3d sample_pos;
@@ -599,9 +601,9 @@ public:
 
             Eigen::Matrix3d sample_ori = sampler_->computeLookAtRotation(sample_pos, target_mes_.center);
 
-            Eigen::Isometry3d sample_pose = Eigen::Isometry3d::Identity();
-            test_pose.translation() = sample_pos;
-            test_pose.linear() = sample_ori;
+            Eigen::Isometry3d sample_pose;
+            sample_pose.translation() = sample_pos;
+            sample_pose.linear() = sample_ori;
 
             std::vector<double> ik_seed = sampler_->sampleUniform();
 
@@ -612,10 +614,6 @@ public:
 
         return false;
     }
-
-
-
-
 
 
     // Helper to extract and smooth path

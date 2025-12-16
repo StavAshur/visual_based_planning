@@ -1,7 +1,7 @@
 planner:
-  mode: "VisRRT" # "VisRRT" or "VisPRM"
-  use_visual_ik: false
-  use_visibility_integrity: false
+  mode: "VisPRM" # "VisRRT" or "VisPRM"
+  use_visual_ik: true
+  use_visibility_integrity: true
 
   # Planning Group & Links
   group_name: "manipulator"
@@ -35,14 +35,14 @@ planner:
     max_iterations: 10000
 
   # # PRM Specific Parameters
-  # prm:
-  #   num_neighbors: 10
-  #   num_samples: 1000
-  #   # 0 = LINEAR, 1 = BINARY_SEARCH
-  #   edge_validation_method: 1
+  prm:
+    num_neighbors: 10
+    num_samples: 50
+    # 0 = LINEAR, 1 = BINARY_SEARCH
+    edge_validation_method: 1
 
   visibility_integrity:
-    num_samples: 1000
+    num_samples: 3000
     vi_threshold: 0.8
     k_neighbors: 5
     limit_diameter_factor: 2.0
