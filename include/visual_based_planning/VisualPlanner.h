@@ -410,14 +410,10 @@ public:
             } 
             else {
                 if (use_visibility_integrity_) {
-                    Eigen::Vector3d goal_sample;
-                    if (vis_integrity_->SampleFromVisibilityRegion(target_mes_.center, q_rand))
+                    if (sampleVisibilityGoal(q_rand)) {
                         valid_sample = true;
+                    }
                 }
-                // else
-                //     if (sampler_->sampleVisibilityAwareState(sampling_radius, target_mes_, q_rand)) {
-                //     valid_sample = true;
-                // } 
             }
 
             if (!valid_sample) {
@@ -524,27 +520,18 @@ public:
             bool found_goal_sample = false;
 
             if (use_visibility_integrity_) {
-
-                Eigen::Vector3d p_sample;
-                if (vis_integrity_->SampleFromVisibilityRegion(target_mes_, p_sample, visibility_threshold_)) {
-                    // Convert 3D point to Joint Config using Greedy Orientation IK
-                    // We need to look at the target center
-                    Eigen::Matrix3d look_at_rot = sampler_->computeLookAtRotation(p_sample, target_mes_.center);
-                    std::vector<geometry_msgs::Point> dummy_targets;
-                    geometry_msgs::Point p; p.x=target_mes_.center.x(); p.y=target_mes_.center.y(); p.z=target_mes_.center.z();
-                    dummy_targets.push_back(p);
-                    
-                    double standoff = (target_mes_.center - p_sample).norm();
-                    std::vector<double> seed_ik = sampler_->sampleUniform(); // Random seed for IK
-                    
-                    if (vis_ik_->solveIKWithOrientation(seed_ik, dummy_targets, look_at_rot, q_goal)) {
-                        found_goal_sample = true;
-                    }
-                }
-            } else {
-                // Standard Sampling until visible
-                if (sampler_->sampleValidPoints(1, q_goal)) {
+                if (sampleVisibilityGoal(q_goal)) {
                     found_goal_sample = true;
+                }
+            }
+            } else {
+                for (int i = 0; i < 100; i++) {
+                    q_goal = sampler_->sampleUniform();
+                    if (validity_checker_->isValid(q_goal))
+                        if (double checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
+                            found_goal_sample = true;
+                            break;
+                        }
                 }
             }
 
@@ -599,6 +586,37 @@ public:
         ROS_WARN("VisPRM: Max iterations reached without solution.");
         return false;
     }
+
+
+
+
+
+
+    bool sampleVisibilityGoal(std::vector<double>& res_sample) {
+
+        Eigen::Vector3d sample_pos;
+        if (vis_integrity_->SampleFromVisibilityRegion(target_mes_.center, sample_pos)) {
+
+            Eigen::Matrix3d sample_ori = sampler_->computeLookAtRotation(sample_pos, target_mes_.center);
+
+            Eigen::Isometry3d sample_pose = Eigen::Isometry3d::Identity();
+            test_pose.translation() = sample_pos;
+            test_pose.linear() = sample_ori;
+
+            std::vector<double> ik_seed = sampler_->sampleUniform();
+
+            if (vis_ik_->solveIK(sample_pose, ik_seed, res_sample)){
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+
+
+
+
 
     // Helper to extract and smooth path
     void finalizePath(VertexDesc start, VertexDesc goal) {

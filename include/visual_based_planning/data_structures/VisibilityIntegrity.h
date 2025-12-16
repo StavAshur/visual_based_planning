@@ -165,7 +165,7 @@ public:
      * 4. Sample a valid point from that cluster's sphere.
      * 5. Verify sampled point sees input point.
      */
-    bool SampleFromVisibilityRegion(const Eigen::Vector3d& point, std::vector<double>& sampled_point) {
+    bool SampleFromVisibilityRegion(const Eigen::Vector3d& point, Eigen::Vector3d& sampled_point) {
         ROS_WARN("Attempting sampling from visibility region...");
         // 1. Find cluster for the input point
         int start_cluster_id = query(point);
@@ -210,7 +210,7 @@ public:
 
             // 5. Verify Visibility: Candidate must see Input Point
             if (vis_oracle_->checkVisibility(candidate, point)) {
-                sampled_point = {candidate[0], candidate[1], candidate[2]};
+                sampled_point = candidate;
                 ROS_ERROR("Found point (%f, %f, %f) using VI", candidate[0], candidate[1], candidate[2]);
                 return true;
             }
