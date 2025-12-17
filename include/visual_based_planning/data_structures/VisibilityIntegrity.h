@@ -229,7 +229,7 @@ public:
      * 5. Verify sampled point sees input ball's center.
      */
     bool SampleFromVisibilityRegion(const Ball& ball, Eigen::Vector3d& sampled_point, double visibility_threshold) {
-        ROS_WARN("Attempting sampling from visibility region...");
+
         // 1. Find cluster for the input ball using majority vote
         std::map<int, int> cluster_votes;
         std::uniform_real_distribution<double> dist_ball(-1.0, 1.0);
@@ -306,6 +306,161 @@ public:
 
         return false;
     }
+
+
+// bool SampleFromVisibilityRegion(const Ball& ball,
+//                                Eigen::Vector3d& sampled_point,
+//                                double visibility_threshold)
+// {
+//     ROS_WARN("[VisSample] Attempting sampling from visibility region...");
+
+//     // 1. Find cluster for the input ball using majority vote
+//     std::map<int, int> cluster_votes;
+//     std::uniform_real_distribution<double> dist_ball(-1.0, 1.0);
+//     int ball_samples = 10;
+
+//     ROS_INFO("[VisSample] Sampling %d points inside ball (r=%.3f)",
+//              ball_samples, ball.radius);
+
+//     for (int i = 0; i < ball_samples; ++i) {
+//         Eigen::Vector3d offset;
+//         do {
+//             offset = Eigen::Vector3d(dist_ball(rng_),
+//                                      dist_ball(rng_),
+//                                      dist_ball(rng_));
+//         } while (offset.squaredNorm() > 1.0);
+
+//         Eigen::Vector3d sample_in_ball = ball.center + offset * ball.radius;
+//         int cid = query(sample_in_ball);
+
+//         if (cid != -1) {
+//             cluster_votes[cid]++;
+//             ROS_INFO("[VisSample] Ball sample %d -> cluster %d (votes=%d)",
+//                      i, cid, cluster_votes[cid]);
+//         } else {
+//             ROS_INFO("[VisSample] Ball sample %d -> no cluster", i);
+//         }
+//     }
+
+//     if (cluster_votes.empty()) {
+//         ROS_WARN("[VisSample] No clusters voted for input ball");
+//         return false;
+//     }
+
+//     int start_cluster_id = -1;
+//     int max_votes = -1;
+//     for (const auto& pair : cluster_votes) {
+//         ROS_INFO("[VisSample] Cluster %d received %d votes",
+//                  pair.first, pair.second);
+
+//         if (pair.second > max_votes) {
+//             max_votes = pair.second;
+//             start_cluster_id = pair.first;
+//         }
+//     }
+
+//     if (start_cluster_id == -1) {
+//         ROS_WARN("[VisSample] Failed to select start cluster");
+//         return false;
+//     }
+
+//     const Cluster& start_cluster = clusters_[start_cluster_id];
+
+//     ROS_INFO("[VisSample] Selected start cluster %d (votes=%d), \n"
+//              "Cluster center: (%.3f, %.3f, %.3f), \n"
+//              "Cluster radius: %.3f, \n"
+//              "Cluster size: %d \n",
+//              start_cluster_id, max_votes,
+//              start_cluster.center[0], start_cluster.center[1], start_cluster.center[2],
+//              start_cluster.radius, start_cluster.size_);
+
+
+//     // 2. Get neighbor clusters
+//     const std::vector<std::pair<int, double>>& candidate_clusters =
+//         cluster_vis_graph_[start_cluster_id];
+
+//     if (candidate_clusters.empty()) {
+//         ROS_WARN("[VisSample] Start cluster %d has no neighbors",
+//                  start_cluster_id);
+//         return false;
+//     }
+
+//     ROS_INFO("[VisSample] %zu candidate clusters for sampling",
+//              candidate_clusters.size());
+
+//     // 3. Sample Loop with rejection sampling
+//     int chosen_cluster_id = -1;
+//     int max_attempts = 100;
+
+//     std::uniform_int_distribution<> dist_idx(0, candidate_clusters.size() - 1);
+//     std::uniform_real_distribution<double> sample_dist(-1.0, 1.0);
+//     std::uniform_real_distribution<> reject_dist(0.0, 1.0);
+
+//     for (int i = 0; i < max_attempts; ++i) {
+
+//         int candidate_idx = dist_idx(rng_);
+//         const auto& candidate_pair = candidate_clusters[candidate_idx];
+//         int candidate_id = candidate_pair.first;
+//         double weight = candidate_pair.second;
+
+//         double r = reject_dist(rng_);
+
+//         ROS_INFO("[VisSample][Attempt %d] Testing cluster %d (weight=%.3f, rand=%.3f)",
+//                  i, candidate_id, weight, r);
+
+//         if (r < weight) {
+//             chosen_cluster_id = candidate_id;
+//         } else {
+//             ROS_INFO("[VisSample][Attempt %d] Rejected by weight", i);
+//             continue;
+//         }
+
+//         const Cluster& chosen_cluster = clusters_[chosen_cluster_id];
+
+
+//         ROS_INFO("[VisSample] Selected sampling cluster %d, \n"
+//                 "Cluster center: (%.3f, %.3f, %.3f), \n"
+//                 "Cluster radius: %.3f, \n"
+//                 "Cluster size: %d \n",
+//                 chosen_cluster_id,
+//                 chosen_cluster.center[0], chosen_cluster.center[1], chosen_cluster.center[2],
+//                 chosen_cluster.radius, chosen_cluster.size_);
+
+
+//         // Sample from cluster sphere
+//         Eigen::Vector3d offset;
+//         do {
+//             offset = Eigen::Vector3d(sample_dist(rng_),
+//                                      sample_dist(rng_),
+//                                      sample_dist(rng_));
+//         } while (offset.squaredNorm() > 1.0);
+
+//         Eigen::Vector3d candidate =
+//             chosen_cluster.center + offset * chosen_cluster.radius;
+
+//         double vis_score =
+//             vis_oracle_->checkBallBeamVisibility(candidate, ball);
+
+//         ROS_INFO("[VisSample][Attempt %d] Visibility score=%.4f (threshold=%.4f)",
+//                  i, vis_score, visibility_threshold);
+
+//         // 4. Verify Visibility
+//         if (vis_score > visibility_threshold) {
+//             sampled_point = candidate;
+//             ROS_INFO("[VisSample] SUCCESS: Sample accepted from cluster %d on attempt %d",
+//                      chosen_cluster_id, i);
+//             return true;
+//         } else {
+//             ROS_INFO("[VisSample][Attempt %d] Visibility rejection", i);
+//         }
+//     }
+
+//     ROS_WARN("[VisSample] FAILED: No valid sample after %d attempts",
+//              max_attempts);
+
+//     return false;
+// }
+
 
 private:
     // --- Step 1: Precompute Sample-to-Sample Visibility (New Vis(p)) ---
@@ -412,6 +567,141 @@ private:
             clusters_.push_back(c);
         }
     }
+
+
+
+
+
+// --- Step 2: Clustering Logic (Greedy) ---
+// void performClustering() {
+//     ROS_INFO("[Clustering] Starting clustering on %zu workspace samples",
+//              workspace_samples_.size());
+
+//     clusters_.clear();
+//     point_to_cluster_map_.assign(workspace_samples_.size(), -1);
+
+//     // List of remaining points (indices)
+//     std::vector<int> remaining_points;
+//     remaining_points.reserve(workspace_samples_.size());
+//     for (size_t i = 0; i < workspace_samples_.size(); ++i) {
+//         remaining_points.push_back(i);
+//     }
+
+//     ROS_INFO("[Clustering] Initialized remaining_points with %zu points",
+//              remaining_points.size());
+
+//     while (!remaining_points.empty()) {
+
+//         ROS_INFO("[Clustering] Remaining points: %zu", remaining_points.size());
+
+//         // 1. Pick random first point
+//         std::uniform_int_distribution<> dist(0, remaining_points.size() - 1);
+//         int rand_idx = dist(rng_);
+//         int first_point_idx = remaining_points[rand_idx];
+
+//         ROS_INFO("[Clustering] Starting new cluster %zu with seed point %d",
+//                  clusters_.size(), first_point_idx);
+
+//         Cluster c;
+//         c.id = clusters_.size();
+//         c.member_indices.push_back(first_point_idx);
+//         point_to_cluster_map_[first_point_idx] = c.id;
+
+//         c.visible_samples_intersection = vis_cache_[first_point_idx];
+//         c.visible_samples_union = vis_cache_[first_point_idx];
+
+//         // Remove first point from remaining
+//         remaining_points[rand_idx] = remaining_points.back();
+//         remaining_points.pop_back();
+
+//         Eigen::Vector3d p_first = workspace_samples_[first_point_idx];
+
+//         // Sort remaining points by distance to first point
+//         std::sort(remaining_points.begin(), remaining_points.end(),
+//             [&](int a, int b) {
+//                 return (workspace_samples_[a] - p_first).squaredNorm() <
+//                        (workspace_samples_[b] - p_first).squaredNorm();
+//             }
+//         );
+
+//         double max_dist_to_first = 0.0;
+
+//         for (size_t i = 0; i < remaining_points.size(); ) {
+//             int curr_idx = remaining_points[i];
+//             double dist = (workspace_samples_[curr_idx] - p_first).norm();
+
+//             if (c.member_indices.size() >= 10 && max_dist_to_first > 1e-6) {
+//                 if (dist > params_.limit_diameter_factor * max_dist_to_first) {
+//                     ROS_INFO("[Clustering][Cluster %d] Early stop: dist %.3f > limit %.3f",
+//                              c.id,
+//                              dist,
+//                              params_.limit_diameter_factor * max_dist_to_first);
+//                     break;
+//                 }
+//             }
+
+//             double score = calculateVI_Incremental(c, vis_cache_[curr_idx]);
+
+//             ROS_INFO("[Clustering][Cluster %d] Testing point %d | dist=%.3f | VI=%.4f",
+//                      c.id, curr_idx, dist, score);
+
+//             if (score >= params_.vi_threshold) {
+
+//                 ROS_INFO("[Clustering][Cluster %d] -> Accepted point %d",
+//                          c.id, curr_idx);
+
+//                 c.member_indices.push_back(curr_idx);
+//                 point_to_cluster_map_[curr_idx] = c.id;
+
+//                 updateSets(c.visible_samples_intersection,
+//                            c.visible_samples_union,
+//                            vis_cache_[curr_idx]);
+
+//                 if (dist > max_dist_to_first) {
+//                     max_dist_to_first = dist;
+//                 }
+
+//                 remaining_points.erase(remaining_points.begin() + i);
+//             } else {
+//                 ROS_INFO("[Clustering][Cluster %d] -> Rejected point %d",
+//                          c.id, curr_idx);
+//                 ++i;
+//             }
+//         }
+
+//         // Compute cluster statistics
+//         Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+//         for (int idx : c.member_indices) {
+//             sum += workspace_samples_[idx];
+//         }
+//         c.center = sum / c.member_indices.size();
+//         c.size_ = c.member_indices.size();
+
+//         double max_r_sq = 0.0;
+//         for (int idx : c.member_indices) {
+//             double r_sq = (workspace_samples_[idx] - c.center).squaredNorm();
+//             if (r_sq > max_r_sq) max_r_sq = r_sq;
+//         }
+//         c.radius = std::sqrt(max_r_sq);
+
+//         ROS_INFO("[Clustering] Finished cluster %d | size=%zu | radius=%.4f",
+//                  c.id, c.member_indices.size(), c.radius);
+
+//         clusters_.push_back(c);
+//     }
+
+//     ROS_INFO("[Clustering] Completed clustering. Total clusters: %zu",
+//              clusters_.size());
+// }
+
+
+
+
+
+
+
+
+
 
     // --- Step 3: Cluster Visibility Graph Building ---
     void buildClusterVisibilityGraph() {

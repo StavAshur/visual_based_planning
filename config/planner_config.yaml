@@ -36,14 +36,14 @@ planner:
 
   # # PRM Specific Parameters
   prm:
-    num_neighbors: 10
-    num_samples: 50
+    num_neighbors: 5
+    num_samples: 100
     # 0 = LINEAR, 1 = BINARY_SEARCH
     edge_validation_method: 1
 
   visibility_integrity:
-    num_samples: 3000
-    vi_threshold: 0.8
+    num_samples: 1000
+    vi_threshold: 0.75
     k_neighbors: 5
     limit_diameter_factor: 2.0
     face_samples: 10

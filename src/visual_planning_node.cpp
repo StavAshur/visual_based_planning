@@ -150,9 +150,11 @@ public:
             // Pass this fresh scene to the planner to update obstacles
             planner_->setPlanningScene(fresh_scene);
 
-            // 2. Pass Targets to Planner
-            planner_->computeTargetMES(req.task.target_points);
+
         }
+
+        // 2. Pass Targets to Planner
+        planner_->computeTargetMES(req.task.target_points);
 
         // 3. Pass Start State
         if (!req.task.start_joints.empty()) {

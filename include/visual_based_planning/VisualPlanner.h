@@ -225,6 +225,7 @@ public:
         planning_scene_ = scene;
         initialize_visibility();
         validity_checker_->setPlanningScene(scene);
+        nn_.setPlanningScene(scene, group_name_);
         is_initialized_ = true;
 
     }
@@ -350,9 +351,6 @@ public:
     }
 
     VertexDesc addState(const std::vector<double>& q) {
-        if (!validity_checker_->isValid(q)) {
-            return -1; 
-        }
         VertexDesc v = graph_.addVertex(q);
         nn_.addPoint(q, v);
         return v;
@@ -382,11 +380,12 @@ public:
             return false;
         }
 
-        VertexDesc root_id = addState(start_joint_values_);
-        if (root_id == -1) {
+        if (!validity_checker_->isValid(start_joint_values_)) {
             ROS_ERROR("Start state is invalid!");
             return false;
         }
+
+        VertexDesc root_id = addState(start_joint_values_);
 
         // Calculate initial sampling radius
         robot_state_->setJointGroupPositions(group_name_, start_joint_values_);
@@ -516,46 +515,53 @@ public:
         std::vector<VertexDesc> goal_ids;
 
         ROS_INFO("Starting VisPRM...");
-
+        int goal_count = 0;
         int max_iterations = 100; // Outer loop limit to avoid infinite run
         for (int iter = 0; iter < max_iterations; ++iter) {
             
             // 2.1 Sample Goal Configuration
-            std::vector<double> q_goal;
-            bool found_goal_sample = false;
+            if (goal_count < 5) {
+                ROS_INFO("Looking for more goal configurations...");
 
-            if (use_visibility_integrity_) {
-                if (sampleVisibilityGoal(q_goal)) {
-                    found_goal_sample = true;
+                bool found_goal = false;
+                std::vector<double> q_goal;
+
+                if (use_visibility_integrity_ ) {
+                    if (sampleVisibilityGoal(q_goal)) {
+                        found_goal = true;
+                    }
                 }
-            }
-            else {
-                for (int i = 0; i < 100; i++) {
-                    q_goal = sampler_->sampleUniform();
-                    if (validity_checker_->isValid(q_goal)) {
-                        if (vis_oracle_->checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
-                            found_goal_sample = true;
-                            break;
+                else {
+                    for (int i = 0; i < 100; i++) {
+                        q_goal = sampler_->sampleUniform();
+                        if (validity_checker_->isValid(q_goal)) {
+                            if (vis_oracle_->checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
+                                found_goal = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            
+
+                if (found_goal) {
+                    goal_count++;
+                    VertexDesc g_id = addState(q_goal);
+                    if (g_id != -1) {
+                        goal_ids.push_back(g_id);
+                        // Connect to k-NN
+                        std::vector<VertexDesc> neighbors = nn_.kNearest(q_goal, prm_params_.num_neighbors);
+                        for (auto n_id : neighbors) {
+                            if (n_id == g_id) continue;
+                            std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
+                            if (validateEdge(q_goal, q_neighbor, prm_params_.edge_validation_method)) {
+                                graph_.addEdge(g_id, n_id, distance(q_goal, q_neighbor));
+                            }
                         }
                     }
                 }
             }
-
-            if (found_goal_sample) {
-                VertexDesc g_id = addState(q_goal);
-                if (g_id != -1) {
-                    goal_ids.push_back(g_id);
-                    // Connect to k-NN
-                    std::vector<VertexDesc> neighbors = nn_.kNearest(q_goal, prm_params_.num_neighbors);
-                    for (auto n_id : neighbors) {
-                        if (n_id == g_id) continue;
-                        std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
-                        if (validateEdge(q_goal, q_neighbor, prm_params_.edge_validation_method)) {
-                            graph_.addEdge(g_id, n_id, distance(q_goal, q_neighbor));
-                        }
-                    }
-                }
-            }
+            ROS_INFO("Looking for path in roadmap...");
 
             // 2.2 Check for Path
             for (auto g_id : goal_ids) {
@@ -581,6 +587,7 @@ public:
                             if (n_id == v_id) continue;
                             std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
                             if (validateEdge(q_rand, q_neighbor, prm_params_.edge_validation_method)) {
+                                ROS_INFO("Adding edge between %zu and %zu with distance %.3f.", v_id, n_id, distance(q_rand, q_neighbor));
                                 graph_.addEdge(v_id, n_id, distance(q_rand, q_neighbor));
                             }
                         }
@@ -594,21 +601,25 @@ public:
     }
 
 
-    bool sampleVisibilityGoal(std::vector<double>& res_sample) {
+    bool sampleVisibilityGoal(std::vector<double>& res_sample, int attempts = 100) {
 
         Eigen::Vector3d sample_pos;
-        if (vis_integrity_->SampleFromVisibilityRegion(target_mes_.center, sample_pos)) {
 
-            Eigen::Matrix3d sample_ori = sampler_->computeLookAtRotation(sample_pos, target_mes_.center);
+        for (int i = 0; i < attempts; i++) {
 
-            Eigen::Isometry3d sample_pose;
-            sample_pose.translation() = sample_pos;
-            sample_pose.linear() = sample_ori;
+            if (vis_integrity_->SampleFromVisibilityRegion(target_mes_, sample_pos, visibility_threshold_)) {
 
-            std::vector<double> ik_seed = sampler_->sampleUniform();
+                Eigen::Matrix3d sample_ori = sampler_->computeLookAtRotation(sample_pos, target_mes_.center);
 
-            if (vis_ik_->solveIK(sample_pose, ik_seed, res_sample)){
-                return true;
+                Eigen::Isometry3d sample_pose;
+                sample_pose.translation() = sample_pos;
+                sample_pose.linear() = sample_ori;
+
+                std::vector<double> ik_seed = sampler_->sampleUniform();
+
+                if (vis_ik_->solveIK(sample_pose, ik_seed, res_sample)){
+                    return true;
+                }
             }
         }
 

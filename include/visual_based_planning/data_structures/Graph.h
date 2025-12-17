@@ -127,7 +127,7 @@ public:
         // 3. Check if path exists
         // If distance is max (infinity), the goal is unreachable
         if (distances[goal] >= std::numeric_limits<double>::max()) {
-            std::cout << "[GraphManager] No path found from " << start << " to " << goal << std::endl;
+            std::cerr << "[GraphManager] No path found from " << start << " to " << goal << std::endl;
             return {}; // Return empty vector
         }
 
