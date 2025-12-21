@@ -555,6 +555,7 @@ public:
                             if (n_id == g_id) continue;
                             std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
                             if (validateEdge(q_goal, q_neighbor, prm_params_.edge_validation_method)) {
+                                ROS_INFO("Connecting goals to graph: Adding edge between %zu and %zu with distance %.3f.", g_id, n_id, distance(q_goal, q_neighbor));
                                 graph_.addEdge(g_id, n_id, distance(q_goal, q_neighbor));
                             }
                         }
@@ -587,7 +588,6 @@ public:
                             if (n_id == v_id) continue;
                             std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
                             if (validateEdge(q_rand, q_neighbor, prm_params_.edge_validation_method)) {
-                                ROS_INFO("Adding edge between %zu and %zu with distance %.3f.", v_id, n_id, distance(q_rand, q_neighbor));
                                 graph_.addEdge(v_id, n_id, distance(q_rand, q_neighbor));
                             }
                         }

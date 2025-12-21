@@ -42,7 +42,7 @@ planner:
     edge_validation_method: 1
 
   visibility_integrity:
-    num_samples: 1000
+    num_samples: 3000
     vi_threshold: 0.75
     k_neighbors: 5
     limit_diameter_factor: 2.0
