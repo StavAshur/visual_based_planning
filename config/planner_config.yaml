@@ -23,7 +23,7 @@ planner:
   # Visibility tool Parameters
   visibility_tool_params:
     beam_length: 3.0
-    beam_angle: 0.5
+    beam_angle: 0.26
 
   # Post-Processing
   enable_shortcutting: true

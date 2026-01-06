@@ -93,7 +93,7 @@ public:
             result.config_name = cfg.name;
 
             // 3. Run the 100 Pre-computed Trials
-            int num_trials = 1;
+            int num_trials = 10;
             for (int i = 0; i < num_trials; ++i) {
                 
                 // Upload the i-th problem to the ROS param server

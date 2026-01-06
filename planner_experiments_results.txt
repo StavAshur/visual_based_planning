@@ -1,0 +1,80 @@
+Experiment Results
+==================
+Configuration: RRT_VisualIK_ON
+Total Successes: 1
+Total Failures:  0
+Initialization Time: 87.6237
+Runtime Stats (Subsequent 99 Runs):
+  Average: 1.60784e-314
+  Median:  8.30568e-315
+  Min:     1.42567e-314
+  Max:     8.77177e-315
+  StdDev:  1.66789e-314
+Run Outcomes (1=Success, 0=Fail): 1
+Raw Times (Run 0 to 99): 87.6237
+
+Configuration: RRT_VisualIK_OFF
+Total Successes: 0
+Total Failures:  1
+Initialization Time: 5.79477
+Runtime Stats (Subsequent 99 Runs):
+  Average: 1.60784e-314
+  Median:  8.30568e-315
+  Min:     1.42567e-314
+  Max:     8.77177e-315
+  StdDev:  1.66789e-314
+Run Outcomes (1=Success, 0=Fail): 0
+Raw Times (Run 0 to 99): 5.79477
+
+Configuration: PRM_VisualIK_ON_Integrity_ON
+Total Successes: 0
+Total Failures:  1
+Initialization Time: 26.5118
+Runtime Stats (Subsequent 99 Runs):
+  Average: 1.60784e-314
+  Median:  8.30568e-315
+  Min:     1.42567e-314
+  Max:     8.77177e-315
+  StdDev:  1.66789e-314
+Run Outcomes (1=Success, 0=Fail): 0
+Raw Times (Run 0 to 99): 26.5118
+
+Configuration: PRM_VisualIK_ON_Integrity_OFF
+Total Successes: 0
+Total Failures:  1
+Initialization Time: 0.000601262
+Runtime Stats (Subsequent 99 Runs):
+  Average: 1.60784e-314
+  Median:  8.30568e-315
+  Min:     1.42567e-314
+  Max:     8.77177e-315
+  StdDev:  1.66789e-314
+Run Outcomes (1=Success, 0=Fail): 0
+Raw Times (Run 0 to 99): 0.000601262
+
+Configuration: PRM_VisualIK_OFF_Integrity_ON
+Total Successes: 0
+Total Failures:  1
+Initialization Time: 0.000495617
+Runtime Stats (Subsequent 99 Runs):
+  Average: 1.60784e-314
+  Median:  8.30568e-315
+  Min:     1.42567e-314
+  Max:     8.77177e-315
+  StdDev:  1.66789e-314
+Run Outcomes (1=Success, 0=Fail): 0
+Raw Times (Run 0 to 99): 0.000495617
+
+Configuration: PRM_VisualIK_OFF_Integrity_OFF
+Total Successes: 0
+Total Failures:  1
+Initialization Time: 0.000509553
+Runtime Stats (Subsequent 99 Runs):
+  Average: 1.60784e-314
+  Median:  8.30568e-315
+  Min:     1.42567e-314
+  Max:     8.77177e-315
+  StdDev:  1.66789e-314
+Run Outcomes (1=Success, 0=Fail): 0
+Raw Times (Run 0 to 99): 0.000509553
+

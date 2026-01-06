@@ -240,7 +240,8 @@ public:
     void setPRMParams(const PRMParams& params) { prm_params_ = params; }
     
     void setVisibilityToolParams(const VisibilityToolParams& params) {
-        vis_oracle_->setVisibilityToolParams(params); 
+        vis_oracle_->setVisibilityToolParams(params);
+        vis_ik_->setVisibilityToolParams(params);
     }
 
     void setVisibilityThreshold(double t) {
