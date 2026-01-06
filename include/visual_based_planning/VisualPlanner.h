@@ -47,6 +47,7 @@ private:
     bool use_visibility_integrity_;
     bool is_initialized_ = false;
     VisibilityIntegrityParams visibility_integrity_params_;
+    int time_cap_;
 
     Ball target_mes_; // Moved to top-level state
     RRTParams rrt_params_;
@@ -93,7 +94,8 @@ public:
           rng_(std::random_device{}()),
           shortcutting_(true),
           use_visual_ik_(false),
-          use_visibility_integrity_(false)
+          use_visibility_integrity_(false),
+          time_cap_(120)
     {
         // 1. Initialize Validity Checker first
         validity_checker_ = std::make_shared<ValidityChecker>(scene, resolution);
@@ -269,6 +271,9 @@ public:
     }
     const std::vector<double>& getStartJoints() const { return start_joint_values_; }
 
+
+    void setTimeCap(int time_cap){time_cap_ = time_cap;}
+
     const std::vector<std::vector<double>>& getResultPath() const { return result_path_; }
 
 
@@ -397,10 +402,15 @@ public:
         std::uniform_real_distribution<double> dist_01(0.0, 1.0);
 
         ROS_INFO("Starting VisRRT...");
-
+        ros::WallTime start_time = ros::WallTime::now();
         // 1. Main Loop
         for (int i = 0; i < rrt_params_.max_iterations; ++i) {
             
+            double elapsed = (ros::WallTime::now() - start_time).toSec();
+            if (elapsed > time_cap_) {
+                ROS_WARN("VisRRT: Time cap of %d s reached (elapsed: %.2f s). Aborting.", time_cap_, elapsed);
+                return false;
+            }
 
             if (i % 100 == 0)
                 ROS_INFO("Starting iteration %d", i);
@@ -517,10 +527,18 @@ public:
         std::vector<VertexDesc> goal_ids;
 
         ROS_INFO("Starting VisPRM...");
+        ros::WallTime start_time = ros::WallTime::now();
+
         int goal_count = 0;
         int max_iterations = 100; // Outer loop limit to avoid infinite run
         for (int iter = 0; iter < max_iterations; ++iter) {
             
+            double elapsed = (ros::WallTime::now() - start_time).toSec();
+            if (elapsed > time_cap_) {
+                ROS_WARN("VisRRT: Time cap of %d s reached (elapsed: %.2f s). Aborting.", time_cap_, elapsed);
+                return false;
+            }
+
             // 2.1 Sample Goal Configuration
             if (goal_count < 5) {
                 ROS_INFO("Looking for more goal configurations...");

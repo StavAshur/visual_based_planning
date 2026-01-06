@@ -88,6 +88,11 @@ public:
         
         // Pass to planner
         planner_->setVisibilityToolParams(vt_params);
+
+        // Load Time Cap
+        int time_cap;
+        pnh_.param("planner/time_cap", time_cap, 120); // Default to 120 if missing
+        planner_->setTimeCap(time_cap);
     }
 
     // Helper to reload parameters and detect changes
