@@ -31,11 +31,6 @@ namespace visual_planner {
 
 class VisibilityOracle {
 public:
-    // 1. Tool Parameters Struct
-    struct VisibilityToolParams {
-        double beam_angle;  // Half-angle in radians (cutoff from Z-axis)
-        double beam_length; // Max range in meters
-    };
 
     // 2. Visibility Method Enum
     enum class VisibilityMethod {

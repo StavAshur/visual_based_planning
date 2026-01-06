@@ -49,23 +49,39 @@ int main(int argc, char** argv)
     return 1;
   }
 
-  if (!config["target_points"]) {
-    ROS_ERROR("YAML missing 'target_points'");
-    return 1;
-  }
+  // if (!config["target_points"]) {
+  //   ROS_ERROR("YAML missing 'target_points'");
+  //   return 1;
+  // }
 
   // 4. Prepare Request
   visual_based_planning::PlanVisibilityPath srv;
   // srv.request.planner_type = planner_type;
 
-  YAML::Node pts = config["target_points"];
-  for (std::size_t i = 0; i < pts.size(); ++i) {
-    geometry_msgs::Point p;
-    p.x = pts[i][0].as<double>();
-    p.y = pts[i][1].as<double>();
-    p.z = pts[i][2].as<double>();
-    srv.request.task.target_points.push_back(p);
+
+  std::vector<float> points_flat;
+  if (nh.getParam("/target_points", points_flat)) {
+
+      // Iterate by 3 since the list is [x, y, z, x, y, z...]
+      for (size_t i = 0; i + 2 < points_flat.size(); i += 3) {
+          geometry_msgs::Point p;
+          p.x = points_flat[i];
+          p.y = points_flat[i+1];
+          p.z = points_flat[i+2];
+          
+          srv.request.task.target_points.push_back(p);
+      }
+  } else {
+      ROS_WARN("Parameter '/target_points' not found on server.");
   }
+  // YAML::Node pts = config["target_points"];
+  // for (std::size_t i = 0; i < pts.size(); ++i) {
+  //   geometry_msgs::Point p;
+  //   p.x = pts[i][0].as<double>();
+  //   p.y = pts[i][1].as<double>();
+  //   p.z = pts[i][2].as<double>();
+  //   srv.request.task.target_points.push_back(p);
+  // }
 
   ROS_INFO("Requesting path for %lu targets using %s...", srv.request.task.target_points.size(), planner_type.c_str());
 

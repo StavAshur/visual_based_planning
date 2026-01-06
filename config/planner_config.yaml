@@ -1,7 +1,7 @@
 planner:
-  mode: "VisPRM" # "VisRRT" or "VisPRM"
+  mode: "VisRRT" # "VisRRT" or "VisPRM"
   use_visual_ik: true
-  use_visibility_integrity: true
+  use_visibility_integrity: false
 
   # Planning Group & Links
   group_name: "manipulator"
@@ -11,19 +11,19 @@ planner:
 
   # # General Settings
   resolution: 0.01
-  visibility_threshold: 0.99
+  visibility_threshold: 0.85
   workspace_bounds:
-    x_min: -1.0
-    x_max: 1.0
-    y_min: -1.0
-    y_max: 1.0
+    x_min: -3.0
+    x_max: 3.0
+    y_min: -3.0
+    y_max: 3.0
     z_min: -0.25
-    z_max: 1.5
+    z_max: 3.5
 
   # Visibility tool Parameters
   visibility_tool_params:
-    beam_length: 1.0
-    beam_angle: 0.21
+    beam_length: 3.0
+    beam_angle: 0.5
 
   # Post-Processing
   enable_shortcutting: true
@@ -32,12 +32,12 @@ planner:
   rrt:
     goal_bias: 0.125
     max_extension: 3.0
-    max_iterations: 10000
+    max_iterations: 1000
 
   # # PRM Specific Parameters
   prm:
     num_neighbors: 5
-    num_samples: 100
+    num_samples: 50
     # 0 = LINEAR, 1 = BINARY_SEARCH
     edge_validation_method: 1
 

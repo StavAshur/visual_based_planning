@@ -41,6 +41,11 @@ namespace visual_planner {
         int face_samples = -1;
     };
     
+
+    struct VisibilityToolParams {
+        double beam_angle = M_PI / 12.0;  // Half-angle in radians
+        double beam_length = 1.0; 
+    };
 } // namespace visual_planner
 
 

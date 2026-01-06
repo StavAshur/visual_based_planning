@@ -26,6 +26,7 @@ public:
         : robot_model_(model), validity_checker_(checker), group_name_(group_name), ee_link_name_(ee_link)
     {
         robot_state_.reset(new moveit::core::RobotState(robot_model_));
+        tool_params_ = {M_PI / 12.0, 1.0};
     }
 
 
@@ -254,19 +255,27 @@ public:
         return solveVisualIK(current_joints, target_points, look_at_rotation, solution_out);
     }
 
+    void setVisibilityToolParams(VisibilityToolParams params) {
+        tool_params_=params;
+    }
+
+    void setVisibilityToolParams(double beam_angle_rad, double beam_length_m) {
+        tool_params_.beam_angle = beam_angle_rad;
+        tool_params_.beam_length = beam_length_m;
+    }
 
 private:
     moveit::core::RobotModelConstPtr robot_model_;
     moveit::core::RobotStatePtr robot_state_;
     std::shared_ptr<ValidityChecker> validity_checker_;
+    VisibilityToolParams tool_params_;
     std::string group_name_;
     std::string ee_link_name_; // End Effector Link (Camera frame)
 
-    // Temporary until I set the flashlight up
     //   get beam range h
     //   get beam angle theta
-    double h = 1.0;
-    double theta = M_PI/3;
+    double h = tool_params_.beam_length;
+    double theta = tool_params_.beam_angle;
     size_t num_steps = 20;
 
 

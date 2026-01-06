@@ -86,6 +86,10 @@ target_link_libraries(visual_planning_client
 )
 add_dependencies(visual_planning_client ${catkin_EXPORTED_TARGETS} ${${PROJECT_NAME}_EXPORTED_TARGETS})
 
+add_executable(experiment_runner src/experiment_runner.cpp)
+target_link_libraries(experiment_runner ${catkin_LIBRARIES})
+add_dependencies(experiment_runner ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
 # add_executable(visual_planning_node src/visual_planning_node.cpp) 
 # target_link_libraries(visual_planning_node 
 #   visibility_cuda_lib

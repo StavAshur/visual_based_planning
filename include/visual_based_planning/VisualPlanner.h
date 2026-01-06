@@ -239,7 +239,7 @@ public:
 
     void setPRMParams(const PRMParams& params) { prm_params_ = params; }
     
-    void setVisibilityToolParams(const VisibilityOracle::VisibilityToolParams& params) {
+    void setVisibilityToolParams(const VisibilityToolParams& params) {
         vis_oracle_->setVisibilityToolParams(params); 
     }
 
@@ -250,7 +250,6 @@ public:
 
     void setUseVisualIK(bool use) {
         use_visual_ik_ = use; 
-        ROS_WARN("Set use_visual_ik to value: %d", use);
         }
     bool getUseVisualIK() const { return use_visual_ik_; }
 
@@ -401,7 +400,9 @@ public:
         // 1. Main Loop
         for (int i = 0; i < rrt_params_.max_iterations; ++i) {
             
-            ROS_INFO("Starting iteration %d", i);
+
+            if (i % 100 == 0)
+                ROS_INFO("Starting iteration %d", i);
 
             std::vector<double> q_rand;
             bool valid_sample = false;
