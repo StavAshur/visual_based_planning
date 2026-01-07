@@ -81,7 +81,6 @@ public:
         prm.edge_validation_method = static_cast<visual_planner::EdgeCheckMode>(edge_method_int);
         planner_->setPRMParams(prm);
 
-        // --- NEW: Visibility Tool Params ---
         visual_planner::VisibilityToolParams vt_params; // Initialized with defaults from Types.h
         pnh_.param("planner/visibility_tool_params/beam_angle", vt_params.beam_angle, vt_params.beam_angle);
         pnh_.param("planner/visibility_tool_params/beam_length", vt_params.beam_length, vt_params.beam_length);
@@ -93,6 +92,17 @@ public:
         int time_cap;
         pnh_.param("planner/time_cap", time_cap, 120); // Default to 120 if missing
         planner_->setTimeCap(time_cap);
+
+
+        visual_planner::VisibilityIntegrityParams vi_params; // Initialized with defaults from Types.h
+        pnh_.param("planner/visibility_integrity_params/num_samples", vi_params.num_samples, vi_params.num_samples);
+        pnh_.param("planner/visibility_integrity_params/vi_threshold", vi_params.vi_threshold, vi_params.vi_threshold);
+        pnh_.param("planner/visibility_integrity_params/k_neighbors", vi_params.k_neighbors, vi_params.k_neighbors);
+        pnh_.param("planner/visibility_integrity_params/limit_diameter_factor", vi_params.limit_diameter_factor, vi_params.limit_diameter_factor);
+        pnh_.param("planner/visibility_integrity_params/face_samples", vi_params.face_samples, vi_params.face_samples);
+        
+        // Pass to planner
+        planner_->setVisibilityIntegrityParams(vi_params);
     }
 
     // Helper to reload parameters and detect changes
@@ -158,6 +168,8 @@ public:
             
             ROS_WARN("Planner Re-Initialization Triggered (Init: %d, ParamsChanged: %d)", 
                      planner_->isInitialized(), params_changed_);
+
+            planner_->reset();
 
             // Get fresh snapshot
             planning_scene::PlanningScenePtr fresh_scene = ls->diff();

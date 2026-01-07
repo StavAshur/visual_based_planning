@@ -19,7 +19,7 @@ planner:
     y_min: -3.0
     y_max: 3.0
     z_min: -0.25
-    z_max: 3.5
+    z_max: 2.5
 
   # Visibility tool Parameters
   visibility_tool_params:
@@ -42,9 +42,9 @@ planner:
     # 0 = LINEAR, 1 = BINARY_SEARCH
     edge_validation_method: 1
 
-  visibility_integrity:
+  visibility_integrity_params:
     num_samples: 5000
-    vi_threshold: 0.75
+    vi_threshold: 0.6
     k_neighbors: 5
     limit_diameter_factor: 2.0
     face_samples: 10

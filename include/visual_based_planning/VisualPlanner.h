@@ -326,6 +326,7 @@ public:
     // ========================================================================
 
     void reset() {
+        ROS_WARN("Clearing roadmap graph and NN tree.");
         nn_.clear();
         graph_.clear(); 
     }
@@ -529,13 +530,55 @@ public:
         ROS_INFO("Starting VisPRM...");
         ros::WallTime start_time = ros::WallTime::now();
 
+
+        ROS_INFO("Scanning existing roadmap for target visibility...");
+        
+        // Assuming GraphManager exposes the number of vertices. 
+        // If not, use appropriate iterator from your Graph.h
+        size_t num_vertices = graph_.getNumVertices(); 
+        
+        for (size_t i = 0; i < num_vertices; ++i) {
+            std::vector<double> q_node = graph_.getVertexConfig(i);
+
+            // A. Visibility Integrity Pruning
+            if (use_visibility_integrity_) {
+                // We need Cartesian position for the integrity check
+                robot_state_->setJointGroupPositions(group_name_, q_node);
+                robot_state_->update();
+                Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
+
+                // Check connectivity in the cluster graph
+                if (!vis_integrity_->isConnectedToTarget(node_ee_pos, target_mes_.center)) {
+                    continue; // Skip this node, it's in a cluster that cannot see the target cluster
+                }
+            }
+
+            // B. Actual Visibility Oracle Check
+            // Check if this node actually sees the target
+            double vis_score = vis_oracle_->checkBallBeamVisibility(q_node, target_mes_.center, target_mes_.radius);
+            
+            if (vis_score > visibility_threshold_) {
+                ROS_INFO("VisPRM: Found existing roadmap node %lu with sufficient visibility (Score: %.2f).", i, vis_score);
+
+                goal_ids.push_back(i);
+
+                // Attempt to find path from Start -> This Node
+                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, i);
+                if (!path_idx.empty()) {
+                    ROS_INFO("VisPRM: Path to existing visible node found!");
+                    finalizePath(root_id, i);
+                    return true;
+                }
+            }
+        }
+
         int goal_count = 0;
         int max_iterations = 100; // Outer loop limit to avoid infinite run
         for (int iter = 0; iter < max_iterations; ++iter) {
             
             double elapsed = (ros::WallTime::now() - start_time).toSec();
             if (elapsed > time_cap_) {
-                ROS_WARN("VisRRT: Time cap of %d s reached (elapsed: %.2f s). Aborting.", time_cap_, elapsed);
+                ROS_WARN("VisPRM: Time cap of %d s reached (elapsed: %.2f s). Aborting.", time_cap_, elapsed);
                 return false;
             }
 
@@ -551,17 +594,17 @@ public:
                         found_goal = true;
                     }
                 }
-                else {
-                    for (int i = 0; i < 100; i++) {
-                        q_goal = sampler_->sampleUniform();
-                        if (validity_checker_->isValid(q_goal)) {
-                            if (vis_oracle_->checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
-                                found_goal = true;
-                                break;
-                            }
-                        }
-                    }
-                }
+                // else {
+                //     for (int i = 0; i < 100; i++) {
+                //         q_goal = sampler_->sampleUniform();
+                //         if (validity_checker_->isValid(q_goal)) {
+                //             if (vis_oracle_->checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
+                //                 found_goal = true;
+                //                 break;
+                //             }
+                //         }
+                //     }
+                // }
             
 
                 if (found_goal) {
@@ -609,6 +652,37 @@ public:
                             std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
                             if (validateEdge(q_rand, q_neighbor, prm_params_.edge_validation_method)) {
                                 graph_.addEdge(v_id, n_id, distance(q_rand, q_neighbor));
+                            }
+                        }
+                    }
+
+                    // 1. Calculate FK for Integrity Check
+                    robot_state_->setJointGroupPositions(group_name_, q_rand);
+                    robot_state_->update();
+                    Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
+
+                    bool perform_vis_check = true;
+
+                    // 2. Visibility Integrity Pre-check (Optional)
+                    if (use_visibility_integrity_) {
+                        if (!vis_integrity_->isConnectedToTarget(node_ee_pos, target_mes_.center)) {
+                            perform_vis_check = false;
+                        }
+                    }
+
+                    // 3. Oracle Check & Path Termination
+                    if (perform_vis_check) {
+                        double vis_score = vis_oracle_->checkBallBeamVisibility(q_rand, target_mes_.center, target_mes_.radius);
+                        
+                        if (vis_score > visibility_threshold_) {
+                            ROS_INFO("VisPRM: New expanded node %lu sees target (Score: %.2f). Checking for path...", v_id, vis_score);
+                            
+                            // Check if this new visible node connects back to the start
+                            std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, v_id);
+                            if (!path_idx.empty()) {
+                                ROS_INFO("VisPRM: Found solution via roadmap expansion!");
+                                finalizePath(root_id, v_id);
+                                return true;
                             }
                         }
                     }
