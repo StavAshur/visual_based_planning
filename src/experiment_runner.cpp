@@ -40,8 +40,8 @@ struct ExperimentResult {
     double first_run_time;                 
     
     // Raw Data (Runs 1-99, excluding init)
-    std::vector<double> all_subsequent_times; 
-    std::vector<double> successful_subsequent_times;
+    std::vector<double> all_times; 
+    std::vector<double> successful_times;
 
     // Success tracking
     int success_count = 0;
@@ -70,8 +70,8 @@ public:
         generateTargetProblems();
 
         std::vector<ExperimentConfig> configs = {
-            {"RRT_VisualIK_ON",  "VisRRT", true,  false},
-            {"RRT_VisualIK_OFF", "VisRRT", false, false},
+            // {"RRT_VisualIK_ON",  "VisRRT", true,  false},
+            // {"RRT_VisualIK_OFF", "VisRRT", false, false},
             // {"PRM_VisualIK_ON_Integrity_ON",   "VisPRM", true,  true},
             // {"PRM_VisualIK_ON_Integrity_OFF",  "VisPRM", true,  false},
             {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true},
@@ -130,20 +130,18 @@ public:
                 if (i == 0) {
                     result.first_run_time = duration;
                     ROS_INFO("  [Init]: %.4f sec | Result: %s", duration, run_success ? "SUCCESS" : "FAIL");
-                } else {
-                    // This is a "warm" run (index 1 to 99)
-                    result.all_subsequent_times.push_back(duration);
-                    if (run_success) {
-                        result.successful_subsequent_times.push_back(duration);
-                    }
                 }
-
+                result.all_times.push_back(duration);
+                if (run_success) {
+                    result.successful_times.push_back(duration);
+                }
+ 
                 if (i % 10 == 0 && i > 0) ROS_INFO("  Progress: %d/%d", i, num_trials);
             }
 
             // Compute Stats for both All and Successful sets
-            result.stats_all = computeStats(result.all_subsequent_times);
-            result.stats_success = computeStats(result.successful_subsequent_times);
+            result.stats_all = computeStats(result.all_times);
+            result.stats_success = computeStats(result.successful_times);
             
             printStats(result);
             all_results.push_back(result);
@@ -228,7 +226,7 @@ private:
         std::cout << "  Success: " << res.success_count << " | Fail: " << res.fail_count << "\n";
         std::cout << "  Init Time: " << res.first_run_time << " s\n";
         
-        std::cout << "  -- All Runs (Excl. Init) --\n";
+        std::cout << "  -- All Runs --\n";
         std::cout << "    Avg: " << res.stats_all.avg << ", Med: " << res.stats_all.median << "\n";
         
         std::cout << "  -- Successful Runs Only --\n";
@@ -257,7 +255,7 @@ private:
             file << "Total Failures:  " << res.fail_count << "\n";
             file << "Initialization Time: " << res.first_run_time << "\n";
             
-            file << "\n--- Stats: ALL Runs (excluding init) ---\n";
+            file << "\n--- Stats: ALL Runs ---\n";
             file << "  Count:   " << res.stats_all.count << "\n";
             file << "  Average: " << res.stats_all.avg << "\n";
             file << "  Median:  " << res.stats_all.median << "\n";
@@ -284,7 +282,7 @@ private:
             file << "\n";
 
             file << "Raw Times (Run 0 to 99): " << res.first_run_time;
-            for (double t : res.all_subsequent_times) {
+            for (double t : res.all_times) {
                 file << ", " << t;
             }
             file << "\n\n";

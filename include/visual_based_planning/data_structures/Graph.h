@@ -6,6 +6,7 @@
 
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/dijkstra_shortest_paths.hpp>
+#include <boost/graph/connected_components.hpp>
 
 // Vertex Property
 struct GraphVertex {
@@ -37,9 +38,8 @@ public:
 
     void addEdge(VertexDesc u, VertexDesc v, double weight) {
         GraphEdge e; e.weight = weight;
-        // Check if edge exists to avoid duplicates if necessary, 
-        // though strictly adding without checking is faster for PRM.
         boost::add_edge(u, v, e, G_);
+        boost::add_edge(v, u, e, G_);
     }
 
     // --- Getters ---
@@ -157,4 +157,47 @@ public:
     void clear() {
         G_.clear();
     }
+
+/**
+     * @brief Computes the number of connected components and prints a representative for each.
+     * @return The number of disjoint subgraphs.
+     */
+    int countConnectedComponents() {
+        if (boost::num_vertices(G_) == 0) return 0;
+        
+        // Map vertex ID -> Component ID
+        std::vector<int> component(boost::num_vertices(G_));
+        int num_components = boost::connected_components(G_, &component[0]);
+        
+        std::cout << "[GraphManager] Total Connected Components: " << num_components << std::endl;
+
+        // Track which component IDs we have already printed
+        std::vector<bool> printed(num_components, false);
+        int count_printed = 0;
+
+        // Iterate through all vertices to find one representative per component
+        for (size_t v = 0; v < component.size(); ++v) {
+            int c_id = component[v];
+            
+            // If we haven't printed a representative for this component yet
+            if (!printed[c_id]) {
+                printed[c_id] = true;
+                count_printed++;
+
+                // Print the representative's configuration
+                std::cout << "  - Component " << c_id << " Rep (Node " << v << "): [";
+                const auto& q = G_[v].joint_config;
+                for (size_t i = 0; i < q.size(); ++i) {
+                    std::cout << q[i] << (i < q.size() - 1 ? ", " : "");
+                }
+                std::cout << "]" << std::endl;
+
+                // Optimization: Stop if we've found all representatives
+                if (count_printed == num_components) break;
+            }
+        }
+        
+        return num_components;
+    }
+
 };

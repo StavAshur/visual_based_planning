@@ -104,7 +104,6 @@ public:
         // 1. Find cluster for the input point
         int start_cluster_id = query(point);
         if (start_cluster_id == -1) return false;
-
         // 2. Get neighbor clusters 
         const std::vector<std::pair<int, double>>& candidate_clusters = cluster_vis_graph_[start_cluster_id];
         
@@ -128,9 +127,10 @@ public:
 
             if (reject_dist(rng_) < weight)
                 chosen_cluster_id = candidate_id;
-            else
+            else {
                 continue;
-
+            
+            }
             const Cluster& chosen_cluster = clusters_[chosen_cluster_id];
 
             // Sample from sphere
@@ -153,6 +153,7 @@ public:
                 sampled_point = candidate;
                 return true;
             }
+
         }
 
         return false;
@@ -217,8 +218,10 @@ public:
 
             if (reject_dist(rng_) < weight)
                 chosen_cluster_id = candidate_id;
-            else
+            else {
+                // ROS_WARN("Edge weight rejection");
                 continue;
+            }
 
             const Cluster& chosen_cluster = clusters_[chosen_cluster_id];
 
@@ -230,17 +233,21 @@ public:
 
             Eigen::Vector3d candidate = chosen_cluster.center + offset * chosen_cluster.radius;
             
-            // --- MODIFICATION: Cluster Membership Check ---
+            // Cluster Membership Check ---
             int candidate_actual_cluster = query(candidate);
             if (candidate_actual_cluster != chosen_cluster_id) {
+                // ROS_WARN("Different cluster!");
                 continue; 
             }
-
+            
+            // ROS_WARN("before.");
             // 4. Verify Visibility: Candidate must see Input Ball Center
             if (vis_oracle_->checkBallBeamVisibility(candidate, ball) > visibility_threshold) {
                 sampled_point = candidate;
                 return true;
             }
+            // ROS_WARN("after.");
+
         }
 
         return false;
@@ -459,7 +466,7 @@ private:
                 int curr_idx = remaining_points[i];
                 double dist = (workspace_samples_[curr_idx] - p_first).norm();
 
-                if (c.member_indices.size() >= 10 && max_dist_to_first > 1e-6) {
+                if (c.member_indices.size() >= 5 && max_dist_to_first > 1e-6) {
                     if (dist > params_.limit_diameter_factor * max_dist_to_first) {
                         break; 
                     }
@@ -500,19 +507,79 @@ private:
 
             clusters_.push_back(c);
         }
+
+
+        // ---------------------------------------------------------
+        // STATS OUTPUT
+        // ---------------------------------------------------------
+        auto computeAndPrintStats = [](const std::string& name, std::vector<double>& data) {
+            if (data.empty()) {
+                ROS_INFO("  %s: None", name.c_str());
+                return;
+            }
+            double sum = 0.0;
+            double min_val = data[0];
+            double max_val = data[0];
+            
+            for(double v : data) {
+                sum += v;
+                if(v < min_val) min_val = v;
+                if(v > max_val) max_val = v;
+            }
+            
+            double avg = sum / data.size();
+            
+            // Standard Deviation
+            double sq_sum = 0.0;
+            for(double v : data) sq_sum += (v - avg) * (v - avg);
+            double std = std::sqrt(sq_sum / data.size());
+            
+            // Median
+            std::sort(data.begin(), data.end());
+            double median = (data.size() % 2 == 0) 
+                            ? (data[data.size()/2 - 1] + data[data.size()/2]) / 2.0 
+                            : data[data.size()/2];
+
+            ROS_INFO("  %s -> Avg: %.3f | Med: %.3f | Min: %.3f | Max: %.3f | Std: %.3f", 
+                name.c_str(), avg, median, min_val, max_val, std);
+        };
+
+        std::vector<double> all_rads, all_sizes;
+        std::vector<double> small_rads, small_sizes;
+        
+        for(const auto& c : clusters_) {
+            all_rads.push_back(c.radius);
+            all_sizes.push_back(static_cast<double>(c.size_));
+            
+            if(c.size_ < 10) {
+                small_rads.push_back(c.radius);
+                small_sizes.push_back(static_cast<double>(c.size_));
+            }
+        }
+
+        ROS_INFO("[VisibilityIntegrity] Clustering Complete. Total Clusters: %lu", clusters_.size());
+        computeAndPrintStats("All - Radius", all_rads);
+        computeAndPrintStats("All - Size  ", all_sizes);
+        
+        ROS_INFO("[VisibilityIntegrity] Small Clusters (<10 pts): %lu", small_sizes.size());
+        if (!small_sizes.empty()) {
+            computeAndPrintStats("Small - Radius", small_rads);
+            computeAndPrintStats("Small - Size  ", small_sizes);
+        }
+        // ---------------------------------------------------------
     }
 
 
-
-    // --- Step 3: Cluster Visibility Graph Building ---
+    // --- Step 3: Cluster Visibility Graph Building (Cached Version) ---
     void buildClusterVisibilityGraph() {
         cluster_vis_graph_.clear();
         cluster_vis_graph_.resize(clusters_.size());
 
-        // --- Define Goal Region ---
+        // 1. Define Goal Region
         Eigen::Vector3d goal_center(0.33, 0.0, 0.33);
         double goal_radius = 1.2;
-        
+
+        // 2. Precompute which clusters intersect the goal
         std::vector<bool> cluster_intersects_goal(clusters_.size(), false);
         for (size_t i = 0; i < clusters_.size(); ++i) {
             double dist = (clusters_[i].center - goal_center).norm();
@@ -522,94 +589,52 @@ private:
         }
 
         int checks_per_pair = 100; 
-        
-        // --- GPU OPTIMIZATION START ---
-        if (vis_oracle_->getMethod() == VisibilityOracle::VisibilityMethod::GPUBF) {
-            
-            // 1. Prepare Batch Data Structures
-            std::vector<Eigen::Vector3d> batch_p1;
-            std::vector<Eigen::Vector3d> batch_p2;
-            // Store mapping to know which result belongs to which cluster pair
-            struct PairMap { size_t i; size_t j; int start_idx; };
-            std::vector<PairMap> pair_mappings;
 
-            // 2. Collect all segments to check
-            for (size_t i = 0; i < clusters_.size(); ++i) {
-                for (size_t j = i + 1; j < clusters_.size(); ++j) {
-                    // Skip if neither targets the goal
-                    if (!cluster_intersects_goal[i] && !cluster_intersects_goal[j]) continue;
-
-                    PairMap pm;
-                    pm.i = i; 
-                    pm.j = j;
-                    pm.start_idx = batch_p1.size();
-                    pair_mappings.push_back(pm);
-
-                    for (int k = 0; k < checks_per_pair; ++k) {
-                        int idx_i = clusters_[i].member_indices[std::uniform_int_distribution<>(0, clusters_[i].size_ - 1)(rng_)];
-                        int idx_j = clusters_[j].member_indices[std::uniform_int_distribution<>(0, clusters_[j].size_ - 1)(rng_)];
-                        
-                        batch_p1.push_back(workspace_samples_[idx_i]);
-                        batch_p2.push_back(workspace_samples_[idx_j]);
-                    }
+        for (size_t i = 0; i < clusters_.size(); ++i) {
+            for (size_t j = i + 1; j < clusters_.size(); ++j) {
+                
+                // Optimization: Skip if neither cluster targets the goal
+                if (!cluster_intersects_goal[i] && !cluster_intersects_goal[j]) {
+                    continue;
                 }
-            }
 
-            // 3. Batch Process on GPU
-            std::vector<bool> batch_results;
-            if (!batch_p1.empty()) {
-                vis_oracle_->checkBatchVisibility(batch_p1, batch_p2, batch_results);
-            }
-
-            // 4. Reconstruct Graph
-            for (const auto& pm : pair_mappings) {
                 int visible_count = 0;
+                
+                // Random sampling check using CACHED results
                 for (int k = 0; k < checks_per_pair; ++k) {
-                    if (batch_results[pm.start_idx + k]) {
+                    // Pick random point indices
+                    int idx_i = clusters_[i].member_indices[std::uniform_int_distribution<>(0, clusters_[i].size_ - 1)(rng_)];
+                    int idx_j = clusters_[j].member_indices[std::uniform_int_distribution<>(0, clusters_[j].size_ - 1)(rng_)];
+                    
+                    // CHECK VISIBILITY VIA CACHE (Binary Search)
+                    if (std::binary_search(vis_cache_[idx_i].begin(), vis_cache_[idx_i].end(), idx_j)) {
                         visible_count++;
                     }
                 }
 
                 if (visible_count > 0) {
                     double weight = static_cast<double>(visible_count) / checks_per_pair;
-                    
-                    if (cluster_intersects_goal[pm.j]) 
-                        cluster_vis_graph_[pm.i].push_back({static_cast<int>(pm.j), weight});
-                    
-                    if (cluster_intersects_goal[pm.i]) 
-                        cluster_vis_graph_[pm.j].push_back({static_cast<int>(pm.i), weight});
-                }
-            }
 
-        } else {
-            // --- EXISTING CPU LOGIC ---
-            for (size_t i = 0; i < clusters_.size(); ++i) {
-                for (size_t j = i + 1; j < clusters_.size(); ++j) {
-                    
-                    if (!cluster_intersects_goal[i] && !cluster_intersects_goal[j]) continue;
-
-                    int visible_count = 0;
-                    for (int k = 0; k < checks_per_pair; ++k) {
-                        int idx_i = clusters_[i].member_indices[std::uniform_int_distribution<>(0, clusters_[i].size_ - 1)(rng_)];
-                        int idx_j = clusters_[j].member_indices[std::uniform_int_distribution<>(0, clusters_[j].size_ - 1)(rng_)];
-                        
-                        if (vis_oracle_->checkVisibility(workspace_samples_[idx_i], workspace_samples_[idx_j])) {
-                            visible_count++;
-                        }
+                    // Add edge i -> j (Only if j intersects goal)
+                    if (cluster_intersects_goal[j]) {
+                        cluster_vis_graph_[i].push_back({static_cast<int>(j), weight});
                     }
 
-                    if (visible_count > 0) {
-                        double weight = static_cast<double>(visible_count) / checks_per_pair;
-                        if (cluster_intersects_goal[j]) 
-                            cluster_vis_graph_[i].push_back({static_cast<int>(j), weight});
-                        if (cluster_intersects_goal[i]) 
-                            cluster_vis_graph_[j].push_back({static_cast<int>(i), weight});
+                    // Add edge j -> i (Only if i intersects goal)
+                    if (cluster_intersects_goal[i]) {
+                        cluster_vis_graph_[j].push_back({static_cast<int>(i), weight});
                     }
                 }
             }
         }
-    }
 
+        // --- NEW: Count and Output Edges ---
+        int total_edges = 0;
+        for (const auto& adj_list : cluster_vis_graph_) {
+            total_edges += adj_list.size();
+        }
+        ROS_WARN("[VisibilityIntegrity] Graph built. Total edges: %d",total_edges);
+    }
 
 
 

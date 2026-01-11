@@ -294,8 +294,23 @@ This is obviously very bad, but I hope it's good enough.
 
 
 
+rostopic pub -1 /joint_states sensor_msgs/JointState "header:
+  seq: 0
+  stamp: {secs: 0, nsecs: 0}
+  frame_id: ''
+name: ['ur_arm_shoulder_pan_joint', 'ur_arm_shoulder_lift_joint', 'ur_arm_elbow_joint', 'ur_arm_wrist_1_joint', 'ur_arm_wrist_2_joint', 'ur_arm_wrist_3_joint']
+position: [4.2718, -2.31469, -0.886255, 4.22474, -0.114735, 2.50107]
+velocity: []
+effort: []"
 
 
-
-
+  - Component 0 Rep (Node 0): [3.13908, -2.57108, 0.584965, 0.15331, 0.821841, -1.34711]
+  - Component 1 Rep (Node 1): [4.2718, -2.31469, -0.886255, 4.22474, -0.114735, 2.50107]
+  - Component 2 Rep (Node 4): [-2.0684, 3.50033, -1.52582, 5.66239, 5.03846, -1.67514]
+  - Component 3 Rep (Node 65): [-3.59072, -6.09309, -2.20329, -3.81297, -2.1566, 0.625787]
+  - Component 4 Rep (Node 73): [5.06953, 3.43167, -1.45059, -5.0706, -4.50585, -0.583155]
+  - Component 5 Rep (Node 96): [-1.53265, -6.15796, 0.367529, 0.307783, -5.07474, 1.45166]
+  - Component 6 Rep (Node 192): [3.98344, -6.15471, -1.65838, -3.7672, -1.82623, 2.44857]
+  - Component 7 Rep (Node 193): [2.34977, -5.6969, -2.07005, 3.04985, 4.34032, 1.24507]
+python -c 'import sys, rospy, moveit_commander; moveit_commander.roscpp_initialize(sys.argv); rospy.init_node("cmd_move", anonymous=True); group = moveit_commander.MoveGroupCommander("manipulator"); group.go([3.98344, -6.15471, -1.65838, -3.7672, -1.82623, 2.44857], wait=True)'
 

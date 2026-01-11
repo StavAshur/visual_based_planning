@@ -575,7 +575,8 @@ public:
         int goal_count = 0;
         int max_iterations = 100; // Outer loop limit to avoid infinite run
         for (int iter = 0; iter < max_iterations; ++iter) {
-            
+            ROS_INFO("Number of connected components in roadmap is: %d", graph_.countConnectedComponents());
+
             double elapsed = (ros::WallTime::now() - start_time).toSec();
             if (elapsed > time_cap_) {
                 ROS_WARN("VisPRM: Time cap of %d s reached (elapsed: %.2f s). Aborting.", time_cap_, elapsed);
@@ -650,7 +651,11 @@ public:
                         for (auto n_id : neighbors) {
                             if (n_id == v_id) continue;
                             std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
+
+                            // ROS_INFO("checking connection between %zu <--> %zu) with distance %3f", v_id, n_id, distance(q_rand, q_neighbor));
+                            
                             if (validateEdge(q_rand, q_neighbor, prm_params_.edge_validation_method)) {
+                                // ROS_INFO("Adding edge %zu <--> %zu) with distance %3f", v_id, n_id, distance(q_rand, q_neighbor));
                                 graph_.addEdge(v_id, n_id, distance(q_rand, q_neighbor));
                             }
                         }
@@ -700,7 +705,7 @@ public:
         Eigen::Vector3d sample_pos;
 
         for (int i = 0; i < attempts; i++) {
-
+            
             if (vis_integrity_->SampleFromVisibilityRegion(target_mes_, sample_pos, visibility_threshold_)) {
 
                 Eigen::Matrix3d sample_ori = sampler_->computeLookAtRotation(sample_pos, target_mes_.center);
@@ -708,7 +713,7 @@ public:
                 Eigen::Isometry3d sample_pose;
                 sample_pose.translation() = sample_pos;
                 sample_pose.linear() = sample_ori;
-
+                
                 std::vector<double> ik_seed = sampler_->sampleUniform();
 
                 if (vis_ik_->solveIK(sample_pose, ik_seed, res_sample)){
