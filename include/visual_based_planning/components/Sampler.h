@@ -189,6 +189,98 @@ public:
         return (valid_count == num_points);
     }
 
+
+/**
+     * @brief Samples points strictly inside box_include but OUTSIDE box_exclude.
+     * Ensures all points are collision-free via the ValidityChecker.
+     * * @param box_include The bounding box to sample within (B).
+     * @param box_exclude The bounding box to exclude (B').
+     * @param num_points Number of valid samples to generate.
+     * @param out_points Vector to append the results to.
+     * @return true if the requested number of points was successfully sampled.
+     */
+    bool sampleOutside(const BoundingBox& box_include, const BoundingBox& box_exclude, 
+                       int num_points, std::vector<Eigen::Vector3d>& out_points) {
+        
+        int valid_count = 0;
+        out_points.reserve(out_points.size() + num_points);
+
+        // Setup distributions for the inclusion box
+        std::uniform_real_distribution<double> dist_x(box_include.x_min, box_include.x_max);
+        std::uniform_real_distribution<double> dist_y(box_include.y_min, box_include.y_max);
+        std::uniform_real_distribution<double> dist_z(box_include.z_min, box_include.z_max);
+
+        int attempts = 0;
+        const int max_attempts = num_points * 200; // Safety limit to prevent infinite loops
+
+        while (valid_count < num_points && attempts < max_attempts) {
+            attempts++;
+
+            // 1. Sample candidate from B (include)
+            double x = dist_x(rng_);
+            double y = dist_y(rng_);
+            double z = dist_z(rng_);
+
+            // 2. Geometric Exclusion Check: Is point inside B' (exclude)?
+            bool inside_exclude = (x >= box_exclude.x_min && x <= box_exclude.x_max &&
+                                   y >= box_exclude.y_min && y <= box_exclude.y_max &&
+                                   z >= box_exclude.z_min && z <= box_exclude.z_max);
+
+            if (inside_exclude) {
+                continue; // Reject
+            }
+
+            // 3. Collision Validity Check
+            // Verify point is not inside any obstacles defined in the validity checker
+            if (validity_checker_ && !validity_checker_->isPointInObstacle(x, y, z)) {
+                out_points.emplace_back(x, y, z);
+                valid_count++;
+            }
+        }
+
+        if (valid_count < num_points) {
+            ROS_WARN("[Sampler] Could not find enough valid points in sampleOutside. Found %d/%d", valid_count, num_points);
+            return false;
+        }
+
+        return true;
+    }
+
+
+    /**
+     * @brief Samples valid, collision-free points strictly within the given bounding box.
+     * @param box The bounding box to sample within.
+     * @param num_points Number of valid samples to generate.
+     * @param out_points Vector to append the results to.
+     * @return true if successful.
+     */
+    bool sampleInBox(const BoundingBox& box, int num_points, std::vector<Eigen::Vector3d>& out_points) {
+        int valid_count = 0;
+        out_points.reserve(out_points.size() + num_points);
+
+        std::uniform_real_distribution<double> dist_x(box.x_min, box.x_max);
+        std::uniform_real_distribution<double> dist_y(box.y_min, box.y_max);
+        std::uniform_real_distribution<double> dist_z(box.z_min, box.z_max);
+
+        int attempts = 0;
+        const int max_attempts = num_points * 100;
+
+        while (valid_count < num_points && attempts < max_attempts) {
+            attempts++;
+            double x = dist_x(rng_);
+            double y = dist_y(rng_);
+            double z = dist_z(rng_);
+
+            // Check Obstacles via ValidityChecker
+            if (validity_checker_ && !validity_checker_->isPointInObstacle(x, y, z)) {
+                out_points.emplace_back(x, y, z);
+                valid_count++;
+            }
+        }
+        return (valid_count == num_points);
+    }
+
+
     // --- Helpers ---
 
     Eigen::Matrix3d computeLookAtRotation(const Eigen::Vector3d& position, const Eigen::Vector3d& target) {

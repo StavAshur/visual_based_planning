@@ -48,6 +48,8 @@ private:
 
     // --- GPU Members ---
     GPUBox* d_obstacles_ = nullptr; // Pointer to GPU memory
+    bool* d_cached_matrix_ = nullptr; // Stores the N*N visibility matrix on GPU
+    int cached_num_points_ = 0;       // N size of the current cached matrix
     bool gpu_dirty_ = false;        // Flag to indicate if CPU/GPU are out of sync
     size_t gpu_capacity_ = 0;       // Current number of allocated slots on GPU
 
@@ -65,6 +67,10 @@ public:
 
     ~VisibilityOracle() {
         freeGPUMemory();
+        if (d_cached_matrix_) {
+            cudaFree(d_cached_matrix_);
+            d_cached_matrix_ = nullptr;
+        }
     }
 
     void addObstacle(double min_x, double min_y, double min_z, double max_x, double max_y, double max_z) {
@@ -141,7 +147,7 @@ public:
         int visible_count = 0;
 
         // 2. Branch based on method
-        if (method_ == VisibilityMethod::GPUBF) {
+        if (false) {
             // --- GPU Batch Path ---
             std::vector<Eigen::Vector3d> ray_starts;
             std::vector<Eigen::Vector3d> ray_ends;
@@ -345,6 +351,92 @@ public:
         cudaFree(d_results);
     }
 
+
+/**
+     * @brief Generates the visibility matrix on the GPU and KEEPS it there.
+     * Call this once before running your integrity loop.
+     * @param points The full set of workspace sample points (N).
+     */
+    void precomputeGpuMatrix(const std::vector<Eigen::Vector3d>& points) {
+        if (points.empty()) return;
+        
+        // A. Setup Obstacles
+        updateGPUObstacles(); 
+
+        // B. Clear old matrix if exists
+        if (d_cached_matrix_) {
+            cudaFree(d_cached_matrix_);
+            d_cached_matrix_ = nullptr;
+        }
+
+        cached_num_points_ = (int)points.size();
+        size_t matrix_size = points.size() * points.size();
+
+        // C. Upload Points to GPU (Temporary, just for this calculation)
+        GPUPoint* d_points;
+        cudaMalloc((void**)&d_points, points.size() * sizeof(GPUPoint));
+
+        std::vector<GPUPoint> host_points(points.size());
+        for(size_t i=0; i<points.size(); ++i) {
+            host_points[i] = {points[i].x(), points[i].y(), points[i].z()};
+        }
+        cudaMemcpy(d_points, host_points.data(), points.size() * sizeof(GPUPoint), cudaMemcpyHostToDevice);
+
+        // D. Allocate and Fill Matrix
+        cudaMalloc((void**)&d_cached_matrix_, matrix_size * sizeof(bool));
+        
+        // Use the generic kernel to fill the matrix
+        launchAllPairsVisibilityKernel(d_obstacles_, obstacles_.size(), d_points, cached_num_points_, d_cached_matrix_);
+
+        // E. Cleanup Points (Matrix stays on GPU!)
+        cudaFree(d_points);
+        
+        // (Optional) Log success
+        // printf("GPU Matrix Cached for %d points (%lu bytes)\n", cached_num_points_, matrix_size);
+    }
+
+    /**
+     * @brief Uses the precomputed GPU matrix to check visibility coverage.
+     * Very fast: only sends indices to GPU, reads back result vector.
+     * @param observer_indices List of indices (into the points vector) acting as guards.
+     * @return std::vector<bool> Size N. True if point[i] is seen by ALL observers.
+     */
+    std::vector<bool> checkSeenByAllGPU(const std::vector<int>& observer_indices) {
+        if (!d_cached_matrix_ || cached_num_points_ == 0) {
+            throw std::runtime_error("GPU Matrix not precomputed! Call precomputeGpuMatrix first.");
+        }
+
+        // A. Upload Indices (Guard set)
+        int num_guards = (int)observer_indices.size();
+        int* d_guards;
+        cudaMalloc((void**)&d_guards, num_guards * sizeof(int));
+        cudaMemcpy(d_guards, observer_indices.data(), num_guards * sizeof(int), cudaMemcpyHostToDevice);
+
+        // B. Allocate Result Buffer (One bool per workspace point)
+        bool* d_results;
+        cudaMalloc((void**)&d_results, cached_num_points_ * sizeof(bool));
+
+        // C. Launch the Reduction Kernel (Defined in VisibilityOracleGPU.h)
+        launchComputeSeenByAll(d_cached_matrix_, cached_num_points_, d_guards, num_guards, d_results);
+
+        // D. Download Results
+        std::vector<bool> host_results(cached_num_points_);
+        
+        // Temp buffer for bool copy
+        bool* temp_host = new bool[cached_num_points_];
+        cudaMemcpy(temp_host, d_results, cached_num_points_ * sizeof(bool), cudaMemcpyDeviceToHost);
+        
+        for (int i = 0; i < cached_num_points_; ++i) {
+            host_results[i] = temp_host[i];
+        }
+
+        // E. Cleanup
+        delete[] temp_host;
+        cudaFree(d_guards);
+        cudaFree(d_results);
+
+        return host_results;
+    }
 
 private:
 

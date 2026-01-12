@@ -161,7 +161,7 @@ private:
         problems_.clear();
         problems_.reserve(100);
 
-        std::uniform_real_distribution<float> dist_z(0.2, 2.5);
+        std::uniform_real_distribution<float> dist_z(0.2, 2.0);
         std::uniform_real_distribution<float> dist_outer(-2.5, 2.5);
         std::uniform_real_distribution<float> dist_r(0.03, 0.5);
         std::normal_distribution<float> dist_norm(0.0, 1.0);

@@ -575,7 +575,7 @@ public:
         int goal_count = 0;
         int max_iterations = 100; // Outer loop limit to avoid infinite run
         for (int iter = 0; iter < max_iterations; ++iter) {
-            ROS_INFO("Number of connected components in roadmap is: %d", graph_.countConnectedComponents());
+            // ROS_INFO("Number of connected components in roadmap is: %d", graph_.countConnectedComponents());
 
             double elapsed = (ros::WallTime::now() - start_time).toSec();
             if (elapsed > time_cap_) {
@@ -661,21 +661,21 @@ public:
                         }
                     }
 
-                    // 1. Calculate FK for Integrity Check
-                    robot_state_->setJointGroupPositions(group_name_, q_rand);
-                    robot_state_->update();
-                    Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
-
+                    
                     bool perform_vis_check = true;
 
-                    // 2. Visibility Integrity Pre-check (Optional)
+                    // Visibility Integrity Pre-check (Optional)
                     if (use_visibility_integrity_) {
+                        robot_state_->setJointGroupPositions(group_name_, q_rand);
+                        robot_state_->update();
+                        Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
+
                         if (!vis_integrity_->isConnectedToTarget(node_ee_pos, target_mes_.center)) {
                             perform_vis_check = false;
                         }
                     }
 
-                    // 3. Oracle Check & Path Termination
+                    // Oracle Check & Path Termination
                     if (perform_vis_check) {
                         double vis_score = vis_oracle_->checkBallBeamVisibility(q_rand, target_mes_.center, target_mes_.radius);
                         

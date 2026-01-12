@@ -136,6 +136,45 @@ __global__ void batchSegmentKernel(const GPUBox* obstacles, int num_obstacles,
     results[idx] = visible;
 }
 
+
+
+// --- Kernel 4: Seen By All Reduction ---
+__global__ void seenByAllKernel(const bool* matrix, int num_points,
+                                const int* query_indices, int num_query_indices,
+                                bool* results) {
+    // Thread ID corresponds to the 'candidate' point we are checking
+    int candidate_idx = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (candidate_idx >= num_points) return;
+
+    bool seen_by_all = true;
+
+    // Check visibility against every Query Index (Guard)
+    for (int k = 0; k < num_query_indices; ++k) {
+        int guard_idx = query_indices[k];
+
+        // Trivial case: A point always sees itself
+        if (guard_idx == candidate_idx) continue;
+
+        // SMART INDEXING:
+        // Because allPairsVisibilityKernel only fills the upper triangle (i <= j),
+        // we must ensure we always read from the smaller index to the larger index.
+        int r = min(guard_idx, candidate_idx);
+        int c = max(guard_idx, candidate_idx);
+        
+        // Matrix is row-major: index = row * N + col
+        if (!matrix[r * num_points + c]) {
+            seen_by_all = false;
+            break; // Failed "seen by all" condition, stop checking
+        }
+    }
+
+    results[candidate_idx] = seen_by_all;
+}
+
+
+
+
 // --- Wrapper Implementation ---
 void launchBatchSegmentKernel(const GPUBox* d_obstacles, int num_obstacles, 
                               const GPUPoint* d_p1, const GPUPoint* d_p2, 
@@ -194,6 +233,30 @@ bool launchVisibilityKernel(const GPUBox* d_obstacles, int num_obstacles,
 
     // If collision found, visibility is FALSE
     return !h_collision_found;
+}
+
+
+// --- Wrapper for Seen By All ---
+void launchComputeSeenByAll(const bool* d_visibility_matrix, int num_points,
+                            const int* d_query_indices, int num_query_indices,
+                            bool* d_results) {
+    
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (num_points + threadsPerBlock - 1) / threadsPerBlock;
+
+    seenByAllKernel<<<blocksPerGrid, threadsPerBlock>>>(
+        d_visibility_matrix, 
+        num_points, 
+        d_query_indices, 
+        num_query_indices, 
+        d_results
+    );
+
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA Error [SeenByAll]: %s\n", cudaGetErrorString(err));
+    }
+    cudaDeviceSynchronize();
 }
 
 

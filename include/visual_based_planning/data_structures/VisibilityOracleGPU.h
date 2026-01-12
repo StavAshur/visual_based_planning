@@ -53,4 +53,18 @@ void launchAllPairsVisibilityKernel(const GPUBox* d_obstacles, int num_obstacles
 void launchBatchSegmentKernel(const GPUBox* d_obstacles, int num_obstacles, 
                               const GPUPoint* d_p1, const GPUPoint* d_p2, 
                               int num_segments, bool* d_results);
+
+/**
+ * @brief Checks which points are visible to ALL provided 'query' points (e.g. guards).
+ * Performs a reduction on the existing GPU visibility matrix.
+ * * @param d_visibility_matrix The NxN boolean matrix from launchAllPairsVisibilityKernel
+ * @param num_points Total number of points (N)
+ * @param d_query_indices Pointer to GPU array of indices to check against (the "All" set)
+ * @param num_query_indices Number of indices in the query set
+ * @param d_results Output array (size N). true if point[i] is seen by ALL query indices.
+ */
+void launchComputeSeenByAll(const bool* d_visibility_matrix, int num_points,
+                            const int* d_query_indices, int num_query_indices,
+                            bool* d_results);
+
 } // namespace visual_planner
