@@ -542,17 +542,17 @@ public:
             std::vector<double> q_node = graph_.getVertexConfig(i);
 
             // A. Visibility Integrity Pruning
-            if (use_visibility_integrity_) {
-                // We need Cartesian position for the integrity check
-                robot_state_->setJointGroupPositions(group_name_, q_node);
-                robot_state_->update();
-                Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
+            // if (use_visibility_integrity_) {
+            //     // We need Cartesian position for the integrity check
+            //     robot_state_->setJointGroupPositions(group_name_, q_node);
+            //     robot_state_->update();
+            //     Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
 
-                // Check connectivity in the cluster graph
-                if (!vis_integrity_->isConnectedToTarget(node_ee_pos, target_mes_.center)) {
-                    continue; // Skip this node, it's in a cluster that cannot see the target cluster
-                }
-            }
+            //     // Check connectivity in the cluster graph
+            //     if (!vis_integrity_->isConnectedToTarget(node_ee_pos, target_mes_.center)) {
+            //         continue; // Skip this node, it's in a cluster that cannot see the target cluster
+            //     }
+            // }
 
             // B. Actual Visibility Oracle Check
             // Check if this node actually sees the target
@@ -585,7 +585,7 @@ public:
             }
 
             // 2.1 Sample Goal Configuration
-            if (goal_count < 5) {
+            if ((goal_count < 5) || ( graph_.getNumVertices() >= prm_params_.max_size)) {
                 ROS_INFO("Looking for more goal configurations...");
 
                 bool found_goal = false;
@@ -596,35 +596,29 @@ public:
                         found_goal = true;
                     }
                 }
-                // else {
-                //     for (int i = 0; i < 100; i++) {
-                //         q_goal = sampler_->sampleUniform();
-                //         if (validity_checker_->isValid(q_goal)) {
-                //             if (vis_oracle_->checkBallBeamVisibility(q_goal, target_mes_.center, target_mes_.radius) > visibility_threshold_) {
-                //                 found_goal = true;
-                //                 break;
-                //             }
-                //         }
-                //     }
-                // }
             
 
                 if (found_goal) {
-                    goal_count++;
-                    VertexDesc g_id = addState(q_goal);
-                    if (g_id != -1) {
-                        goal_ids.push_back(g_id);
-                        // Connect to k-NN
-                        std::vector<VertexDesc> neighbors = nn_.kNearest(q_goal, prm_params_.num_neighbors);
-                        for (auto n_id : neighbors) {
-                            if (n_id == g_id) continue;
-                            std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
-                            if (validateEdge(q_goal, q_neighbor, prm_params_.edge_validation_method)) {
-                                ROS_INFO("Connecting goals to graph: Adding edge between %zu and %zu with distance %.3f.", g_id, n_id, distance(q_goal, q_neighbor));
-                                graph_.addEdge(g_id, n_id, distance(q_goal, q_neighbor));
+                    bool added = false;
+                    VertexDesc g_id;
+                    if (!validity_checker_->isValid(q_goal))
+                        ROS_ERROR("THE GOAL STATE IS INVALID - THIS SHOULD NOT HAPPEN");
+                    // Connect to k-NN
+                    std::vector<VertexDesc> neighbors = nn_.kNearest(q_goal, prm_params_.num_neighbors);
+                    for (auto n_id : neighbors) {
+                        std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
+                        if (validateEdge(q_goal, q_neighbor, prm_params_.edge_validation_method)) {
+                            if (!added){
+                                goal_count++;
+                                g_id = addState(q_goal);
+                                goal_ids.push_back(g_id);
+                                added = true;
                             }
+                            ROS_INFO("Connecting goals to graph: Adding edge between %zu and %zu with distance %.3f.", g_id, n_id, distance(q_goal, q_neighbor));
+                            graph_.addEdge(g_id, n_id, distance(q_goal, q_neighbor));
                         }
                     }
+
                 }
             }
             ROS_INFO("Looking for path in roadmap...");
@@ -642,53 +636,55 @@ public:
             }
 
             // 2.3 Expand Roadmap
-            ROS_INFO("VisPRM: Expanding roadmap (Iter %d)...", iter);
-            for (int i = 0; i < prm_params_.num_samples; ++i) {
-                std::vector<double> q_rand = sampler_->sampleUniform();
-                if (validity_checker_->isValid(q_rand)) {
-                    VertexDesc v_id = addState(q_rand);
-                    if (v_id != -1) {
-                        std::vector<VertexDesc> neighbors = nn_.kNearest(q_rand, prm_params_.num_neighbors);
-                        for (auto n_id : neighbors) {
-                            if (n_id == v_id) continue;
-                            std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
+            if (!use_visibility_integrity_ || ( graph_.getNumVertices() < prm_params_.max_size)) {
+                ROS_INFO("VisPRM: Expanding roadmap (Iter %d)...", iter);
+                for (int i = 0; i < prm_params_.num_samples; ++i) {
+                    std::vector<double> q_rand = sampler_->sampleUniform();
+                    if (validity_checker_->isValid(q_rand)) {
+                        VertexDesc v_id = addState(q_rand);
+                        if (v_id != -1) {
+                            std::vector<VertexDesc> neighbors = nn_.kNearest(q_rand, prm_params_.num_neighbors);
+                            for (auto n_id : neighbors) {
+                                if (n_id == v_id) continue;
+                                std::vector<double> q_neighbor = graph_.getVertexConfig(n_id);
 
-                            // ROS_INFO("checking connection between %zu <--> %zu) with distance %3f", v_id, n_id, distance(q_rand, q_neighbor));
-                            
-                            if (validateEdge(q_rand, q_neighbor, prm_params_.edge_validation_method)) {
-                                // ROS_INFO("Adding edge %zu <--> %zu) with distance %3f", v_id, n_id, distance(q_rand, q_neighbor));
-                                graph_.addEdge(v_id, n_id, distance(q_rand, q_neighbor));
+                                // ROS_INFO("checking connection between %zu <--> %zu) with distance %3f", v_id, n_id, distance(q_rand, q_neighbor));
+                                
+                                if (validateEdge(q_rand, q_neighbor, prm_params_.edge_validation_method)) {
+                                    // ROS_INFO("Adding edge %zu <--> %zu) with distance %3f", v_id, n_id, distance(q_rand, q_neighbor));
+                                    graph_.addEdge(v_id, n_id, distance(q_rand, q_neighbor));
+                                }
                             }
                         }
-                    }
 
-                    
-                    bool perform_vis_check = true;
-
-                    // Visibility Integrity Pre-check (Optional)
-                    if (use_visibility_integrity_) {
-                        robot_state_->setJointGroupPositions(group_name_, q_rand);
-                        robot_state_->update();
-                        Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
-
-                        if (!vis_integrity_->isConnectedToTarget(node_ee_pos, target_mes_.center)) {
-                            perform_vis_check = false;
-                        }
-                    }
-
-                    // Oracle Check & Path Termination
-                    if (perform_vis_check) {
-                        double vis_score = vis_oracle_->checkBallBeamVisibility(q_rand, target_mes_.center, target_mes_.radius);
                         
-                        if (vis_score > visibility_threshold_) {
-                            ROS_INFO("VisPRM: New expanded node %lu sees target (Score: %.2f). Checking for path...", v_id, vis_score);
+                        bool perform_vis_check = true;
+
+                        // // Visibility Integrity Pre-check (Optional)
+                        // if (use_visibility_integrity_) {
+                        //     robot_state_->setJointGroupPositions(group_name_, q_rand);
+                        //     robot_state_->update();
+                        //     Eigen::Vector3d node_ee_pos = robot_state_->getGlobalLinkTransform(ee_link_name_).translation();
+
+                        //     if (!vis_integrity_->isConnectedToTarget(node_ee_pos, target_mes_.center)) {
+                        //         perform_vis_check = false;
+                        //     }
+                        // }
+
+                        // Oracle Check & Path Termination
+                        if (perform_vis_check) {
+                            double vis_score = vis_oracle_->checkBallBeamVisibility(q_rand, target_mes_.center, target_mes_.radius);
                             
-                            // Check if this new visible node connects back to the start
-                            std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, v_id);
-                            if (!path_idx.empty()) {
-                                ROS_INFO("VisPRM: Found solution via roadmap expansion!");
-                                finalizePath(root_id, v_id);
-                                return true;
+                            if (vis_score > visibility_threshold_) {
+                                ROS_INFO("VisPRM: New expanded node %lu sees target (Score: %.2f). Checking for path...", v_id, vis_score);
+                                
+                                // Check if this new visible node connects back to the start
+                                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, v_id);
+                                if (!path_idx.empty()) {
+                                    ROS_INFO("VisPRM: Found solution via roadmap expansion!");
+                                    finalizePath(root_id, v_id);
+                                    return true;
+                                }
                             }
                         }
                     }

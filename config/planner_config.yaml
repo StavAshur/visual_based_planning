@@ -2,7 +2,7 @@ planner:
   mode: "VisRRT" # "VisRRT" or "VisPRM"
   use_visual_ik: true
   use_visibility_integrity: false
-  time_cap: 60 #seconds
+  time_cap: 120 #seconds
 
   # Planning Group & Links
   group_name: "manipulator"
@@ -41,6 +41,7 @@ planner:
     num_samples: 50
     # 0 = LINEAR, 1 = BINARY_SEARCH
     edge_validation_method: 1
+    max_size: 10000
 
   visibility_integrity_params:
     num_samples: 1000

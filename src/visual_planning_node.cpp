@@ -79,6 +79,8 @@ public:
         int edge_method_int = 1; 
         pnh_.param("planner/prm/edge_validation_method", edge_method_int, 1);
         prm.edge_validation_method = static_cast<visual_planner::EdgeCheckMode>(edge_method_int);
+        pnh_.param("planner/prm/max_size", prm.max_size, 10000);
+
         planner_->setPRMParams(prm);
 
         visual_planner::VisibilityToolParams vt_params; // Initialized with defaults from Types.h

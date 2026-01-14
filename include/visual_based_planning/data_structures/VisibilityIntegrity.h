@@ -114,17 +114,23 @@ public:
     bool SampleFromVisibilityRegion(const Ball& ball, Eigen::Vector3d& sampled_point, double visibility_threshold) {
         // 1. Find the leaf that contains the target Ball's center
         std::vector<std::pair<VINode*, double>> seers;
-        int target_leaf_idx = query(ball.center, seers);
-        if (target_leaf_idx == -1) return false;
-
-        VINode* target_node = leaves_[target_leaf_idx];
+        query(ball, seers);
 
         if (seers.empty()) {
-            ROS_WARN("[SampleFromVisibilityRegion] no one sees this point????");
+            // ROS_WARN("[SampleFromVisibilityRegion] no one sees this point????");
             return false;
         }
-        // 3. Rejection Sampling Loop
-        int max_attempts = 100;
+
+        // ROS_INFO("[SampleFromVisibilityRegion] Query success! Found %d seers.", (int)seers.size());
+        // for (size_t i = 0; i < seers.size(); ++i) {
+        //     ROS_INFO("  -> Seer [%d]: Node ID %d | Intersection Vol: %.4f", 
+        //              (int)i, 
+        //              seers[i].first->id, 
+        //              seers[i].second);
+        // }
+
+        // 2. Rejection Sampling Loop
+        int max_attempts = 1000;
         std::uniform_int_distribution<> dist_idx(0, seers.size() - 1);
         std::uniform_real_distribution<double> dist_prob(0.0, 1.0);
 
@@ -133,21 +139,16 @@ public:
             int rand_idx = dist_idx(rng_);
             const auto& candidate_pair = seers[rand_idx];
             
-            int seer_id = candidate_pair.first;
-            double vis_score = candidate_pair.second;
+            VINode* seer_node = candidate_pair.first;
+            double intersection_volume = candidate_pair.second;
 
             // B. Rejection Sampling: Reject with probability (1 - score)
             // (i.e., Accept if random value < score)
-            if (dist_prob(rng_) > vis_score) {
+            if (dist_prob(rng_) > intersection_volume) {
                 continue; 
             }
 
-            // C. Retrieve the actual Node object
-            // Assumes all_nodes_map_ is populated as per previous steps
-            if (all_nodes_map_.find(seer_id) == all_nodes_map_.end()) continue;
-            VINode* seer_node = all_nodes_map_[seer_id];
-
-            // D. Sample a point from the seer's bounding box
+            // C. Sample a point from the seer's bounding box
             std::vector<Eigen::Vector3d> samples;
             // sampleInBox ensures the point is within bounds and obstacle-free
             if (!sampler_->sampleInBox(seer_node->box, 1, samples) || samples.empty()) {
@@ -155,7 +156,7 @@ public:
             }
             Eigen::Vector3d candidate_point = samples[0];
 
-            // E. Verify actual visibility against the Ball
+            // D. Verify actual visibility against the Ball
             // Returns fraction of ball visible from candidate_point
             double visible_fraction = vis_oracle_->checkBallBeamVisibility(candidate_point, ball);
 
@@ -224,54 +225,87 @@ public:
         return nullptr;
     }
 
-    /**
-     * @brief Ball Query: Returns nodes contained in or intersecting the ball (leaves only for intersection).
-     * Populates 'out_seeing_nodes' with visibility lists from ALL visited nodes (ancestors/contained/intersecting).
+/**
+     * @brief Populates 'out_seeing_nodes' with (Seer, IntersectionVolume) pairs.
+     * Traverses the tree to find nodes intersecting the ball.
+     * - If fully contained: IntersectionVolume = Box Volume.
+     * - If leaf (partial intersection): IntersectionVolume = Approx Sampled Volume.
      */
-    void std::vector<VINode*> query(const Ball& ball, std::vector<std::pair<VINode*, double>>& out_seeing_nodes) {
+    void query(const Ball& ball, std::vector<std::pair<VINode*, double>>& out_seeing_nodes) {
         out_seeing_nodes.clear();
-
         if (!root_) return;
 
-        // Recursive Lambda for Traversal
-        // We use std::function to allow recursion
+        // Recursive traversal lambda
         std::function<void(VINode*)> traverse = [&](VINode* node) {
             if (!node) return;
-
-            // 1. Check Intersection
-            // If the distance from the ball center to the box is > radius, they are disjoint.
+            // ROS_INFO("[BallQuery] Visiting Node ID: %d | Path: %s | Box: [%.2f, %.2f] [%.2f, %.2f] [%.2f, %.2f]", 
+            //          node->id, 
+            //          node->path_idx.c_str(),
+            //          node->box.x_min, node->box.x_max,
+            //          node->box.y_min, node->box.y_max,
+            //          node->box.z_min, node->box.z_max);
+            // 1. Check Intersection (Pruning)
+            // If the box is completely outside the ball radius, skip it.
             double d2 = distSqPointBox(ball.center, node->box);
             if (d2 > ball.radius * ball.radius) {
-                return; // Prune: No intersection
-            }
-
-            // 2. Accumulate Visibility (From this node, which intersects the ball)
-            out_seeing_nodes.insert(
-                out_seeing_nodes.end(),
-                node->visible_from_nodes.begin(),
-                node->visible_from_nodes.end()
-            );
-
-            // 3. Check Containment
-            // If fully contained, we add this node and STOP recursing (as per instructions).
-            if (isBoxFullyInBall(node->box, ball)) {
-                result_nodes.push_back(node->id);
+                // ROS_INFO("   -> Pruned: Box is outside ball radius.");
                 return; 
             }
 
-            // 4. Handle Partial Intersection
-            if (node->is_leaf) {
-                // If leaf intersects (but not fully contained), we still return it.
-                result_nodes.push_back(node);
-            } else {
-                // Internal node intersects but is not contained: Recurse
+            bool fully_contained = isBoxFullyInBall(node->box, ball);
+            // if (fully_contained) ROS_INFO("   -> Status: Fully Contained.");
+            // else if (node->is_leaf) ROS_INFO("   -> Status: Leaf Intersecting.");
+            // else ROS_INFO("   -> Status: Partial Intersection (Internal).");
+            // 2. Process "Relevant" Nodes (Fully Contained OR Leaves)
+            if (fully_contained || node->is_leaf) {
+                double intersection_volume = 0.0;
+
+                if (fully_contained) {
+                    intersection_volume = getBoxVolume(node->box);
+                } else {
+                    // Leaf with partial intersection
+                    intersection_volume = getApproxIntersectionVolume(node->box, ball);
+                }
+
+                // If the volume is non-negligible, process visibility
+                if (intersection_volume > 1e-9) {
+                    // ROS_INFO("   -> Processing %lu seers from this node (Vol: %.4f):", 
+                    //          node->visible_from_nodes.size(), intersection_volume);
+                    // Iterate over 'visible_from_nodes' (which stores pairs <VINode*, double>)
+                    // We extract the pointer 'u_ptr' and pair it with the computed volume.
+                    for (const auto& seer_pair : node->visible_from_nodes) {
+                        VINode* u = seer_pair.first;
+
+                        bool found = false;
+                        for (auto& existing_pair : out_seeing_nodes) {
+                            if (existing_pair.first == u) {
+                                existing_pair.second += intersection_volume;
+                                found = true;
+                                break;
+                            }
+                        }
+
+                        if (!found) {
+                            out_seeing_nodes.push_back({u, intersection_volume});
+                        // ROS_INFO("      + Added Seer ID: %d", u->id);
+                        }
+                    }
+                }
+
+                // If fully contained, children are also fully contained.
+                // We stop here to avoid double counting volume (assuming disjoint partition strategy)
+                // or simply because the prompt says "whenever we find a node... fully contained".
+                if (fully_contained) return;
+            }
+
+            // 3. Recurse (Internal nodes that are NOT fully contained)
+            if (!node->is_leaf) {
                 traverse(node->left.get());
                 traverse(node->right.get());
             }
         };
 
         traverse(root_.get());
-        return result_nodes;
     }
 
 
@@ -400,6 +434,7 @@ private:
         if (score > params_.vi_threshold || too_small) {
             // ROS_INFO("[Node %s] DECISION: LEAF (Final ID: %d)",idx.c_str(), node->id);
             makeLeaf(node);
+            leaf_counter++;
         } else {
             // Split (Alg 2 Lines 12-16)
             int d = 0; // 0=x, 1=y, 2=z
@@ -450,20 +485,227 @@ private:
                 node->left = nullptr;
             if (!right_success)
                 node->right = nullptr;
-            if ((!left_success) && (!right_success))
+            if ((!left_success) && (!right_success)) {
                 makeLeaf(node);            
+                leaf_counter++;
+            }
             
             ROS_INFO("[Node %s] Finished processing children. Height set to %d", idx.c_str(), node->height);
         }
         return true;
     }
 
-    void makeLeaf(VINode* node, int& leaf_counter) {
-        leaf_counter++;
+    void makeLeaf(VINode* node) {
         node->is_leaf = true;
         node->height = 0;
         leaves_.push_back(node);
+        std::ofstream leaf_file("leaf_boxes.txt", std::ios::app);
+        if (leaf_file.is_open()) {
+            // Format: ID min_x max_x min_y max_y min_z max_z
+            leaf_file << node->id << " "
+                      << node->box.x_min << " " << node->box.x_max << " "
+                      << node->box.y_min << " " << node->box.y_max << " "
+                      << node->box.z_min << " " << node->box.z_max << "\n";
+            leaf_file.close();
+        }
     }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/**
+     * @brief Computes all-pairs visibility between leaf centers.
+     * Updates 'visible_from_nodes' based on the sphere intersection constraints.
+     */
+    void ComputeLeafPairwiseVisibility() {
+        if (leaves_.empty()) return;
+
+        std::cout << "[VisibilityIntegrity] Computing Leaf Pairwise Visibility (" 
+                  << leaves_.size() << " leaves)..." << std::endl;
+
+        // 1. Prepare Data
+        std::vector<Eigen::Vector3d> leaf_centers;
+        leaf_centers.reserve(leaves_.size());
+        
+        for (VINode* leaf : leaves_) {
+            Eigen::Vector3d c(
+                (leaf->box.x_min + leaf->box.x_max) / 2.0,
+                (leaf->box.y_min + leaf->box.y_max) / 2.0,
+                (leaf->box.z_min + leaf->box.z_max) / 2.0
+            );
+            leaf_centers.push_back(c);
+        }
+
+        // 2. Run GPU Batch Visibility (All Pairs)
+        // results[i * N + j] is true if leaf[i] sees leaf[j]
+        std::vector<bool> visibility_matrix;
+        vis_oracle_->computeBatchVisibility(leaf_centers, visibility_matrix);
+
+        size_t N = leaves_.size();
+
+        // 3. Update Lists
+        for (size_t i = 0; i < N; ++i) {
+            for (size_t j = 0; j < N; ++j) {
+                if (i == j) continue; // Skip self
+
+                // Check visibility (Symmetric in theory, but matrix might have 1-way if P1!=P2)
+                if (visibility_matrix[i * N + j]) {
+                    VINode* u = leaves_[i]; // The "Seer"? Or "Target"?
+                    VINode* v = leaves_[j];
+                    
+                    bool u_in_sphere = intersectsTargetSphere(u->box);
+                    bool v_in_sphere = intersectsTargetSphere(v->box);
+                    double score = 1.0; // Base score for raw visibility
+
+                    // Update u's list with v
+                    if (v_in_sphere) {
+                        u->visible_from_nodes.push_back({v, score});
+                    }
+
+                }
+            }
+        }
+    }
+
+/**
+     * @brief Bottom-Up Recursive Traversal.
+     * Computes internal node visibility by intersecting children's lists.
+     * Propagates parent visibility back to the 'seers'.
+     * Handles single-child nodes by copying and propagating.
+     */
+    void ComputeParentVisibilityBottomUp(VINode* node) {
+        if (!node || node->is_leaf) return;
+
+        // 1. Recurse First (Post-Order)
+        if (node->left) ComputeParentVisibilityBottomUp(node->left.get());
+        if (node->right) ComputeParentVisibilityBottomUp(node->right.get());
+
+        // 2. Case A: Two Children - Intersect
+        if (node->left && node->right) {
+            
+            // Sort lists by Node ID to enable linear intersection
+            auto& list_l = node->left->visible_from_nodes;
+            auto& list_r = node->right->visible_from_nodes;
+
+            std::sort(list_l.begin(), list_l.end(), [](const auto& a, const auto& b){
+                return a.first->id < b.first->id;
+            });
+            std::sort(list_r.begin(), list_r.end(), [](const auto& a, const auto& b){
+                return a.first->id < b.first->id;
+            });
+
+            // Perform Intersection
+            auto it_l = list_l.begin();
+            auto it_r = list_r.begin();
+
+            while (it_l != list_l.end() && it_r != list_r.end()) {
+                if (it_l->first->id < it_r->first->id) {
+                    ++it_l;
+                } else if (it_r->first->id < it_l->first->id) {
+                    ++it_r;
+                } else {
+                    // Match Found! Same Node 'S' sees both Left and Right
+                    VINode* seer = it_l->first;
+                    double avg_score = (it_l->second + it_r->second) / 2.0;
+
+                    // Add S to Parent (node)'s list
+                    node->visible_from_nodes.push_back({seer, avg_score});
+
+                    // Add Parent (node) to Seer's list
+                    seer->visible_from_nodes.push_back({node, avg_score});
+
+                    ++it_l;
+                    ++it_r;
+                }
+            }
+        }
+        // 3. Case B: Single Child (Left or Right)
+        else if (node->left || node->right) {
+            VINode* child = node->left ? node->left.get() : node->right.get();
+            
+            // Copy the child's list to the parent
+            node->visible_from_nodes = child->visible_from_nodes;
+
+            // Update the nodes in that list by inserting the parent
+            for (auto& pair : node->visible_from_nodes) {
+                VINode* seer = pair.first;
+                double score = pair.second;
+                
+                // Add parent to the seer's list
+                seer->visible_from_nodes.push_back({node, score});
+            }
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     /**
@@ -477,39 +719,6 @@ private:
         if (node->convexity_score > 0.99) {
             ComputeVisibilityInSiblings(node);
             node->visibility_computed = true;
-            std::ofstream log_file("tree_visibility_log.txt", std::ios::app);
-            if (log_file.is_open()) {
-                log_file << "Node ID: " << node->id << "\n";
-                log_file << "  Path Index: " << node->path_idx << "\n";
-                log_file << "  Height: " << node->height << "\n";
-                log_file << "  Is Leaf: " << (node->is_leaf ? "true" : "false") << "\n";
-                log_file << "  Convexity Score: " << node->convexity_score << "\n";
-                log_file << "  Visibility Computed: " << (node->visibility_computed ? "true" : "false") << "\n";
-                
-                // Bounding Box
-                log_file << "  Bounding Box: " 
-                        << "[" << node->box.x_min << ", " << node->box.x_max << "] x "
-                        << "[" << node->box.y_min << ", " << node->box.y_max << "] x "
-                        << "[" << node->box.z_min << ", " << node->box.z_max << "]\n";
-
-                // Relationships
-                log_file << "  Parent ID: " << (node->parent ? std::to_string(node->parent->id) : "null") << "\n";
-                log_file << "  Left Child ID: " << (node->left ? std::to_string(node->left->id) : "null") << "\n";
-                log_file << "  Right Child ID: " << (node->right ? std::to_string(node->right->id) : "null") << "\n";
-
-                //  Visibility
-                log_file << "  Visible Nodes (Outgoing): [";
-                for (size_t i = 0; i < node->visible_from_nodes.size(); ++i) {
-                    log_file << "(" << node->visible_from_nodes[i].first << ", " 
-                            << node->visible_from_nodes[i].second << ")";
-                    if (i < node->visible_from_nodes.size() - 1) log_file << ", ";
-                }
-
-                log_file << "]\n";
-
-                log_file << "--------------------------------------------------\n";
-                log_file.close();
-            }
         }
 
         // 2. Recursively traverse children
@@ -708,221 +917,49 @@ private:
     }
 
 
+    // --- Volume Helpers ---
 
-
-
-    /**
-     * @brief Iterates over tree layers to build visibility connections.
-     * Replaces the old graph building method.
-     */
-    void buildVisibilityLayers() {
-        std::cout << "[VisibilityIntegrity] Building Visibility Layers..." << std::endl;
-
-        // 1. Organize all nodes by height
-        // We need to traverse the tree to collect pointers to all nodes
-        std::map<int, std::vector<VINode*>> layers;
-        collectNodesByLayer(root_.get(), layers);
-
-        // 2. Process Layer 0 (Leaves) - The Base Case
-        // We use the GPU to compute leaf-to-leaf visibility
-        if (layers.count(0)) {
-            computeLeafLayerVisibility(layers[0]);
-        }
-
-        // // 3. Process Upper Layers (1 to Max Height)
-        // for (auto it = layers.begin(); it != layers.end(); ++it) {
-        //     int h = it->first;
-        //     if (h == 0) continue; // Already done
-
-        //     std::vector<VINode*>& current_layer = it->second;
-        //     std::cout << "Processing Layer " << h << " (" << current_layer.size() << " nodes)..." << std::endl;
-
-        //     for (VINode* node : current_layer) {
-        //         if (!node->left || !node->right) continue;
-
-        //         // A. Compute "Seen By This Node" (Outgoing)
-        //         // V sees U iff Left sees U AND Right sees U.
-        //         // Intersection of sorted vectors.
-        //         std::vector<std::pair<int, double>>& left_vis = node->left->visible_from_nodes;
-        //         std::vector<std::pair<int, double>>& right_vis = node->right->visible_from_nodes;
-                
-        //         // (Vectors must be sorted for set_intersection)
-        //         // They are guaranteed sorted by our compute functions.
-                
-        //         // A. Compute "Seen By This Node" (Outgoing) - Custom Intersection
-        //         // Both vectors must be sorted by ID (first element) for this to work.
-                
-        //         auto it_left = left_vis.begin();
-        //         auto it_right = right_vis.begin();
-
-        //         while (it_left != left_vis.end() && it_right != right_vis.end()) {
-        //             if (it_left->first < it_right->first) {
-        //                 ++it_left;
-        //             } else if (it_right->first < it_left->first) {
-        //                 ++it_right;
-        //             } else {
-        //                 // Match found! (IDs are equal)
-        //                 double avg_weight = (it_left->second + it_right->second) / 2.0;
-
-        //                 if (avg_weight > params_.vi_threshold) {
-        //                     node->visible_from_nodes.push_back({it_left->first, avg_weight});
-        //                 }
-
-        //                 // Move both forward
-        //                 ++it_left;
-        //                 ++it_right;
-        //             }
-        //         }
-        //     }
-        // }
+    double getBoxVolume(const BoundingBox& b) {
+        return (b.x_max - b.x_min) * (b.y_max - b.y_min) * (b.z_max - b.z_min);
     }
 
-    void computeLeafLayerVisibility(std::vector<VINode*>& leaves) {
-        size_t num_leaves = leaves.size();
-        int n_samples = params_.num_samples;
+    double getApproxIntersectionVolume(const BoundingBox& b, const Ball& ball) {
+        double box_vol = getBoxVolume(b);
 
-        ROS_INFO("[LeafVis] Starting O(L^2) visibility check for %lu leaves.", num_leaves);
+        double r_sq = ball.radius * ball.radius;
 
-        // We compare every leaf against every other leaf (O(L^2)) on GPU
-        for (size_t i = 0; i < num_leaves; ++i) {
-            VINode* l1 = leaves[i];
-            
-            bool l1_intersect_ws = intersectsWorkspaceSphere(l1->box);
+        double sphere_vol = r_sq * M_PI;
+        if (box_vol <= 1e-9) return 0.0;
 
-            // Periodic logging for outer loop progress
-            if (i % 5 == 0 || i == num_leaves - 1) {
-                ROS_INFO("[LeafVis] Processing Outer Leaf %d (%lu/%lu)", l1->id, i + 1, num_leaves);
+        int samples = 1000;
+        int inside_count = 0;
+        
+        // Use local distributions to sample inside this specific box
+        std::uniform_real_distribution<double> x_d(b.x_min, b.x_max);
+        std::uniform_real_distribution<double> y_d(b.y_min, b.y_max);
+        std::uniform_real_distribution<double> z_d(b.z_min, b.z_max);
+
+
+        for(int i=0; i<samples; ++i) {
+            double px = x_d(rng_);
+            double py = y_d(rng_);
+            double pz = z_d(rng_);
+
+            double dx = px - ball.center.x();
+            double dy = py - ball.center.y();
+            double dz = pz - ball.center.z();
+
+            if (dx*dx + dy*dy + dz*dz <= r_sq) {
+                inside_count++;
             }
-
-
-            std::vector<Eigen::Vector3d> S1;
-            bool s1_ok = sampler_->sampleInBox(l1->box, n_samples, S1);
-
-            if (!s1_ok || S1.empty()) {
-                ROS_WARN("[LeafVis] Leaf %d: Failed to sample S1 (Empty or invalid)", l1->id);
-                continue;
-            }
-
-            for (size_t j = i + 1; j < num_leaves; ++j) {
-                VINode* l2 = leaves[j];
-
-                bool l2_intersect_ws = intersectsWorkspaceSphere(l2->box);
-
-                if (!l1_intersect_ws && !l2_intersect_ws)
-                    continue;
-
-                std::vector<Eigen::Vector3d> S2;
-                bool s2_ok = sampler_->sampleInBox(l2->box, n_samples, S2);
-                
-                if (!s2_ok || S2.empty()) {
-                    // Log only occasionally to avoid spam if a specific node is problematic
-                    // ROS_WARN("[LeafVis] Leaf %d vs %d: Failed to sample S2", l1->id, l2->id);
-                    continue;
-                }
-
-                // (Optimized: Combine S1+S2, Precompute, check sub-blocks)
-                std::pair<double,double> m1m2 = checkBiDirectionalVisibility(S1, S2); // Wrapper helper
-
-                // Check Forward Visibility (l1 -> l2)
-                if (m1m2.first > params_.vi_threshold) {
-                    if (l2_intersect_ws) {
-                        ROS_INFO("[LeafVis] Link ADDED: Leaf %d sees Leaf %d (Score: %.2f)", 
-                                l1->id, l2->id, m1m2.first);
-                        l1->visible_from_nodes.push_back(std::make_pair(l2, m1m2.first));
-                    } else {
-                        ROS_INFO("[LeafVis] Link REJECTED: Leaf %d sees Leaf %d (Score: %.2f) but l2 not in TargetSphere", 
-                                l1->id, l2->id, m1m2.first);
-                    }
-                }
-
-                // Check Reverse Visibility (l2 -> l1)
-                if (m1m2.second > params_.vi_threshold) {
-                    if (l1_intersect_ws) {
-                        ROS_INFO("[LeafVis] Link ADDED: Leaf %d sees Leaf %d (Score: %.2f)", 
-                                l2->id, l1->id, m1m2.second);
-                        l2->visible_from_nodes.push_back(std::make_pair(l1, m1m2.second));
-                    } else {
-                        ROS_INFO("[LeafVis] Link REJECTED: Leaf %d sees Leaf %d (Score: %.2f) but l1 not in TargetSphere", 
-                                l2->id, l1->id, m1m2.second);
-                    }
-                }
-            }
-
-            // Ensure sorted for intersection later
-            std::sort(leaves[i]->visible_from_nodes.begin(), leaves[i]->visible_from_nodes.end(), [](const auto& a, const auto& b) {
-                return a.first < b.first;
-            });
-            
-            // Log final connection count for this node
-            ROS_INFO("[LeafVis] Leaf %d finished. Connected to %lu nodes.", 
-                    l1->id, leaves[i]->visible_from_nodes.size());
         }
 
-        ROS_INFO("[LeafVis] Finished computing visibility graph.");
-    }
-
-
-
-    void collectNodesByLayer(VINode* node, std::map<int, std::vector<VINode*>>& layers) {
-        if (!node) return;
-        layers[node->height].push_back(node);
-        all_nodes_map_[node->id] = node; // Helper for ID lookups
-        collectNodesByLayer(node->left.get(), layers);
-        collectNodesByLayer(node->right.get(), layers);
+        return box_vol * (static_cast<double>(inside_count) / samples) / sphere_vol;
     }
 
     // Helper map for ID lookup
     std::unordered_map<int, VINode*> all_nodes_map_;
 
-
-    std::pair<double,double> checkBiDirectionalVisibility(const std::vector<Eigen::Vector3d>& S1, 
-                                                   const std::vector<Eigen::Vector3d>& S2) 
-    {
-        if (S1.empty() || S2.empty()) {
-            ROS_ERROR("[VisibilityIntegrity] either S1 or S2 is empty");
-            return std::make_pair(-1.0, -1.0);
-        }
-        
-
-        // 1. Combine samples into a single context [S1 ... S2]
-        std::vector<Eigen::Vector3d> combined = S1;
-        combined.insert(combined.end(), S2.begin(), S2.end());
-
-        // 2. Upload and Compute NxN Matrix on GPU
-        // This is the heavy lifting, done once for this pair.
-        vis_oracle_->precomputeGpuMatrix(combined);
-
-
-        // --- Direction 1: Does S2 see S1? ---
-        // Guards = All points in S2 (indices S1.size() to end)
-        std::vector<int> guards_s2(S2.size());
-        std::iota(guards_s2.begin(), guards_s2.end(), (int)S1.size());
-
-        std::vector<bool> res_s2 = vis_oracle_->checkSeenByAllGPU(guards_s2);
-
-        double m1 = 0.0;
-        // We check the success count in the S1 portion (indices 0 to S1.size()-1)
-        for (size_t k = 0; k < S1.size(); ++k) {
-            if (res_s2[k]) m1 = m1 + 1.0;
-        }
-
-        // --- Direction 2: Does S1 see S2? ---
-        // Guards = All points in S1 (indices 0 to S1.size()-1)
-        std::vector<int> guards_s1(S1.size());
-        std::iota(guards_s1.begin(), guards_s1.end(), 0);
-        
-        // Result is boolean for every point in 'combined'
-        std::vector<bool> res_s1 = vis_oracle_->checkSeenByAllGPU(guards_s1);
-
-        double m2 = 0.0;
-        // We check the success count in the S2 portion (indices starting at S1.size())
-        for (size_t k = S1.size(); k < combined.size(); ++k) {
-            if (res_s1[k]) m2 = m2 + 1.0;
-        }
-
-        // Return true only if mutual visibility exists
-        return std::make_pair(m1/S2.size(),m2/S1.size());
-    }
 };
 
 } // namespace visual_planner

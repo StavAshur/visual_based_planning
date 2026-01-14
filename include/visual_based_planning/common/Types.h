@@ -31,6 +31,7 @@ namespace visual_planner {
         int num_neighbors = 10;          
         int num_samples = 1000;          
         EdgeCheckMode edge_validation_method = EdgeCheckMode::BINARY_SEARCH;
+        int max_size = 10000;
     };
 
     struct VisibilityIntegrityParams {
