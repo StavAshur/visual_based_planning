@@ -67,4 +67,8 @@ void launchComputeSeenByAll(const bool* d_visibility_matrix, int num_points,
                             const int* d_query_indices, int num_query_indices,
                             bool* d_results);
 
+
+void launchComputeSeenByAny(const bool* d_visibility_matrix, int num_points,
+                            const int* d_query_indices, int num_query_indices,
+                            bool* d_results);
 } // namespace visual_planner

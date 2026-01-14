@@ -173,6 +173,35 @@ __global__ void seenByAllKernel(const bool* matrix, int num_points,
 }
 
 
+// --- Kernel 5: Seen By Any (OR Reduction) ---
+__global__ void seenByAnyKernel(const bool* matrix, int num_points,
+                                const int* query_indices, int num_query_indices,
+                                bool* results) {
+    int candidate_idx = blockDim.x * blockIdx.x + threadIdx.x;
+    if (candidate_idx >= num_points) return;
+
+    bool seen_by_any = false;
+
+    for (int k = 0; k < num_query_indices; ++k) {
+        int guard_idx = query_indices[k];
+        
+        // A point always sees itself
+        if (guard_idx == candidate_idx) { 
+            seen_by_any = true; 
+            break; 
+        }
+
+        int r = min(guard_idx, candidate_idx);
+        int c = max(guard_idx, candidate_idx);
+        
+        if (matrix[r * num_points + c]) {
+            seen_by_any = true;
+            break; // Found one! Optimization: Stop checking.
+        }
+    }
+    results[candidate_idx] = seen_by_any;
+}
+
 
 
 // --- Wrapper Implementation ---
@@ -259,5 +288,18 @@ void launchComputeSeenByAll(const bool* d_visibility_matrix, int num_points,
     cudaDeviceSynchronize();
 }
 
+
+// --- Wrapper for Seen By Any ---
+void launchComputeSeenByAny(const bool* d_visibility_matrix, int num_points,
+                            const int* d_query_indices, int num_query_indices,
+                            bool* d_results) {
+    int threadsPerBlock = 256;
+    int blocksPerGrid = (num_points + threadsPerBlock - 1) / threadsPerBlock;
+
+    seenByAnyKernel<<<blocksPerGrid, threadsPerBlock>>>(
+        d_visibility_matrix, num_points, d_query_indices, num_query_indices, d_results
+    );
+    cudaDeviceSynchronize();
+}
 
 } // namespace visual_planner

@@ -74,8 +74,8 @@ public:
             // {"RRT_VisualIK_OFF", "VisRRT", false, false},
             // {"PRM_VisualIK_ON_Integrity_ON",   "VisPRM", true,  true},
             // {"PRM_VisualIK_ON_Integrity_OFF",  "VisPRM", true,  false},
-            {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true},
-            {"PRM_VisualIK_OFF_Integrity_OFF", "VisPRM", false, false}
+            {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true}
+            // {"PRM_VisualIK_OFF_Integrity_OFF", "VisPRM", false, false}
         };
 
         std::vector<ExperimentResult> all_results;

@@ -145,6 +145,7 @@ public:
         vis_integrity_ = std::make_shared<VisibilityIntegrity>();
         vis_integrity_->setSampler(sampler_);
         vis_integrity_->setVisibilityOracle(vis_oracle_);
+        vis_integrity_->setWorkspaceBounds(workspace_bounds_);
 
         // 9. Populate Visibility Oracle with Obstacles and build visibility integrity tool
         initialize_visibility();
@@ -220,7 +221,7 @@ public:
         workspace_bounds_ = bounds;
         sampler_->setWorkspaceBounds(bounds);
         validity_checker_->setWorkspaceBounds(bounds);
-
+        vis_integrity_->setWorkspaceBounds(bounds);
     }
 
     void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {

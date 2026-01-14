@@ -222,13 +222,8 @@ public:
         Point3D pt1(p1[0], p1[1], p1[2]);
         Point3D pt2(p2[0], p2[1], p2[2]);
         Segment3D segment(pt1, pt2);
-
-        switch (method_) {
-            case VisibilityMethod::BF: return checkVisibilityBF(segment);
-            case VisibilityMethod::GPUBF: return checkVisibilityGPUBF(segment);
-            case VisibilityMethod::KDTree: return checkVisibilityKDTree(segment);
-            default: throw std::runtime_error("Unknown visibility check method.");
-        }
+        
+        return checkVisibilityBF(segment);
     }
 
     bool checkVisibility(const Eigen::Vector3d& p1, const Eigen::Vector3d& p2) {
@@ -437,6 +432,41 @@ public:
 
         return host_results;
     }
+
+
+    /**
+     * @brief Checks which points are seen by AT LEAST ONE observer.
+     */
+    std::vector<bool> checkSeenByAnyGPU(const std::vector<int>& observer_indices) {
+        if (!d_cached_matrix_ || cached_num_points_ == 0) {
+            throw std::runtime_error("GPU Matrix not precomputed!");
+        }
+        if (observer_indices.empty()) return std::vector<bool>(cached_num_points_, false);
+
+        int num_guards = (int)observer_indices.size();
+        int* d_guards;
+        cudaMalloc((void**)&d_guards, num_guards * sizeof(int));
+        cudaMemcpy(d_guards, observer_indices.data(), num_guards * sizeof(int), cudaMemcpyHostToDevice);
+
+        bool* d_results;
+        cudaMalloc((void**)&d_results, cached_num_points_ * sizeof(bool));
+
+        // Call the new 'Any' wrapper
+        launchComputeSeenByAny(d_cached_matrix_, cached_num_points_, d_guards, num_guards, d_results);
+
+        std::vector<bool> host_results(cached_num_points_);
+        bool* temp_host = new bool[cached_num_points_];
+        cudaMemcpy(temp_host, d_results, cached_num_points_ * sizeof(bool), cudaMemcpyDeviceToHost);
+        
+        for (int i = 0; i < cached_num_points_; ++i) host_results[i] = temp_host[i];
+
+        delete[] temp_host;
+        cudaFree(d_guards);
+        cudaFree(d_results);
+
+        return host_results;
+    }
+
 
 private:
 

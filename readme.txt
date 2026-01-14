@@ -357,7 +357,7 @@ rostopic pub -1 /joint_states sensor_msgs/JointState "header:
   stamp: {secs: 0, nsecs: 0}
   frame_id: ''
 name: ['ur_arm_shoulder_pan_joint', 'ur_arm_shoulder_lift_joint', 'ur_arm_elbow_joint', 'ur_arm_wrist_1_joint', 'ur_arm_wrist_2_joint', 'ur_arm_wrist_3_joint']
-position: [2.33743, -5.73727, -2.51291, 3.18104, -1.37381, 0.0963526]
+position: [0.615573, 3.05682, 1.77823, -6.09464, -2.3624, 5.34495]
 velocity: []
 effort: []"
 
@@ -365,5 +365,15 @@ python -c 'import sys, rospy, moveit_commander; \
 moveit_commander.roscpp_initialize(sys.argv); \
 rospy.init_node("cmd_move", anonymous=True); \
 group = moveit_commander.MoveGroupCommander("manipulator"); \
-group.go([2.33743, -5.73727, -2.51291, 3.18104, -1.37381, 0.0963526], wait=True)'
+group.go([-3.05052, -6.18799, -2.04114, 3.81547, -6.0373, 1.35121], wait=True)'
 
+I have decided to change the way I compute visible_from_nodes.
+ Write a new recursive method that takes a root node and then travels up to the root
+ ( I have added a VINode* parent variable in struct VINode), and at any node v up to the root 
+ including) the method calls another method that traverses other side of the subtree
+ rooted at the other child of v layer by layer (so in a BFS manner, not a DFS manner)
+ and for every node if that node's convexity score
+ (I have added a double convexity_score variable in struct VINode) is above 0.99,    
+
+
+ Now write a function called ComputeNodeVisibility that we will use instead of foo. For an input node v ComputeNodeVisibility will traverse up the tree starting at the parent of v, and for 
