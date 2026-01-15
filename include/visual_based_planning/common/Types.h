@@ -29,7 +29,8 @@ namespace visual_planner {
 
     struct PRMParams {
         int num_neighbors = 10;          
-        int num_samples = 1000;          
+        int num_samples = 1000;  
+        int max_goals = 10;
         EdgeCheckMode edge_validation_method = EdgeCheckMode::BINARY_SEARCH;
         int max_size = 10000;
     };

@@ -279,11 +279,11 @@ private:
 bool validateEdgeLinear(const std::vector<double>& start, const std::vector<double>& end, double dist) {
         int steps = std::ceil(dist / resolution_);
         
-        ROS_INFO("----------------------------------------------------------");
-        ROS_INFO("[ValidateEdgeLinear] START");
-        ROS_INFO("  > Distance:   %.4f", dist);
-        ROS_INFO("  > Resolution: %.4f", resolution_);
-        ROS_INFO("  > Total Steps: %d", steps);
+        // ROS_INFO("----------------------------------------------------------");
+        // ROS_INFO("[ValidateEdgeLinear] START");
+        // ROS_INFO("  > Distance:   %.4f", dist);
+        // ROS_INFO("  > Resolution: %.4f", resolution_);
+        // ROS_INFO("  > Total Steps: %d", steps);
 
         for (int i = 1; i < steps; ++i) {
             double t = (double)i / (double)steps;
@@ -295,24 +295,24 @@ bool validateEdgeLinear(const std::vector<double>& start, const std::vector<doub
             // ROS_INFO("    Checking step %d/%d (t=%.2f): %s", i, steps, t, ss_debug.str().c_str());
 
             if (!isValid(intermediate)) {
-                ROS_INFO("[ValidateEdgeLinear] FAILURE DETECTED");
-                ROS_INFO("  > Failed at Step: %d / %d", i, steps);
-                ROS_INFO("  > Interpolation factor (t): %.4f", t);
+                // ROS_INFO("[ValidateEdgeLinear] FAILURE DETECTED");
+                // ROS_INFO("  > Failed at Step: %d / %d", i, steps);
+                // ROS_INFO("  > Interpolation factor (t): %.4f", t);
                 
-                std::stringstream ss;
-                ss << "[";
-                for (size_t j = 0; j < intermediate.size(); ++j) {
-                    ss << intermediate[j] << (j < intermediate.size() - 1 ? ", " : "");
-                }
-                ss << "]";
-                ROS_INFO("  > Invalid Configuration: %s", ss.str().c_str());
-                ROS_INFO("----------------------------------------------------------");
+                // std::stringstream ss;
+                // ss << "[";
+                // for (size_t j = 0; j < intermediate.size(); ++j) {
+                //     ss << intermediate[j] << (j < intermediate.size() - 1 ? ", " : "");
+                // }
+                // ss << "]";
+                // ROS_INFO("  > Invalid Configuration: %s", ss.str().c_str());
+                // ROS_INFO("----------------------------------------------------------");
                 return false;
             }
         }
 
-        ROS_INFO("[ValidateEdgeLinear] SUCCESS: Edge is valid.");
-        ROS_INFO("----------------------------------------------------------");
+        // ROS_INFO("[ValidateEdgeLinear] SUCCESS: Edge is valid.");
+        // ROS_INFO("----------------------------------------------------------");
         return true;
     }
 

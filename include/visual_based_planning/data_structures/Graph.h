@@ -4,6 +4,9 @@
 #include <limits>    // for infinity
 #include <iostream>  // for logging
 
+#include <Eigen/Dense>
+#include <Eigen/Geometry> // Required for Eigen::Isometry3d
+
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/dijkstra_shortest_paths.hpp>
 #include <boost/graph/connected_components.hpp>
@@ -11,6 +14,7 @@
 // Vertex Property
 struct GraphVertex {
     std::vector<double> joint_config;
+    Eigen::Isometry3d ee_pose;
 };
 
 // Edge Property
@@ -30,9 +34,15 @@ public:
     
     // --- Modifiers ---
 
-    VertexDesc addVertex(const std::vector<double>& q) {
+    /**
+     * @brief Adds a vertex with a configuration and an end-effector pose.
+     * @param q The joint configuration.
+     * @param pose The Isometry3d pose associated with this vertex (e.g., end-effector pose).
+     */
+    VertexDesc addVertex(const std::vector<double>& q, const Eigen::Isometry3d& pose) {
         VertexDesc v = boost::add_vertex(G_);
         G_[v].joint_config = q;
+        G_[v].ee_pose = pose; // Store the pose
         return v;
     }
 
@@ -47,6 +57,11 @@ public:
     // Get the Joint Configuration of a specific node
     std::vector<double> getVertexConfig(VertexDesc v) const {
         return G_[v].joint_config;
+    }
+
+    // Get the End-Effector Pose of a specific node
+    Eigen::Isometry3d getVertexPose(VertexDesc v) const {
+        return G_[v].ee_pose;
     }
 
     // Get the number of vertices

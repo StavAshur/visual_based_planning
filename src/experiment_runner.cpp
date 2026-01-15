@@ -70,8 +70,8 @@ public:
         generateTargetProblems();
 
         std::vector<ExperimentConfig> configs = {
-            // {"RRT_VisualIK_ON",  "VisRRT", true,  false},
-            // {"RRT_VisualIK_OFF", "VisRRT", false, false},
+            {"RRT_VisualIK_ON",  "VisRRT", true,  false},
+            {"RRT_VisualIK_OFF", "VisRRT", false, false},
             // {"PRM_VisualIK_ON_Integrity_ON",   "VisPRM", true,  true},
             // {"PRM_VisualIK_ON_Integrity_OFF",  "VisPRM", true,  false},
             {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true},
@@ -94,7 +94,7 @@ public:
             ExperimentResult result;
             result.config_name = cfg.name;
 
-            int num_trials = 10;
+            int num_trials = 100;
             for (int i = 0; i < num_trials; ++i) {
                 
                 nh_.setParam("/target_points", problems_[i].points_flat);

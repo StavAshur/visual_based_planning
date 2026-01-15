@@ -101,7 +101,10 @@ public:
         root_->id = node_counter++;
 
         buildTreeRecursive(root_.get(), workspace_bounds_, "0", node_counter, leaf_counter);
-        ComputeTreeVisibility(root_.get());
+        // ComputeTreeVisibility(root_.get());
+        
+        ComputeLeafPairwiseVisibility();
+        ComputeParentVisibilityBottomUp(root_.get());
         std::cout << "[VisibilityIntegrity] Tree built. Leaves: " << leaves_.size() << std::endl;
 
     }
@@ -573,8 +576,8 @@ private:
                     VINode* u = leaves_[i]; // The "Seer"? Or "Target"?
                     VINode* v = leaves_[j];
                     
-                    bool u_in_sphere = intersectsTargetSphere(u->box);
-                    bool v_in_sphere = intersectsTargetSphere(v->box);
+                    bool u_in_sphere = intersectsWorkspaceSphere(u->box);
+                    bool v_in_sphere = intersectsWorkspaceSphere(v->box);
                     double score = 1.0; // Base score for raw visibility
 
                     // Update u's list with v
@@ -628,11 +631,11 @@ private:
                     VINode* seer = it_l->first;
                     double avg_score = (it_l->second + it_r->second) / 2.0;
 
-                    // Add S to Parent (node)'s list
-                    node->visible_from_nodes.push_back({seer, avg_score});
-
-                    // Add Parent (node) to Seer's list
-                    seer->visible_from_nodes.push_back({node, avg_score});
+                    if(intersectsWorkspaceSphere(seer->box)) 
+                       node->visible_from_nodes.push_back({seer, avg_score});
+                    
+                    if(intersectsWorkspaceSphere(node->box))
+                        seer->visible_from_nodes.push_back({node, avg_score});
 
                     ++it_l;
                     ++it_r;
@@ -860,7 +863,8 @@ private:
 
 
     bool intersectsWorkspaceSphere(BoundingBox& b){
-        double cx = 0.33, cy = 0.0, cz = 0.33;
+        // double cx = 0.33, cy = 0.0, cz = 0.33;
+        double cx = 0.0, cy = 0.0, cz = 0.0;
         double r_sq = 1.2 * 1.2;
         double dist_sq = 0.0;
 

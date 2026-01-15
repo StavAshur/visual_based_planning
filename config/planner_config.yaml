@@ -6,9 +6,10 @@ planner:
 
   # Planning Group & Links
   group_name: "manipulator"
-  ee_link_name: "ur_arm_tool0"
+  # ee_link_name: "ur_arm_tool0"
+  # ee_link_name: "tool0"
   # ee_link_name: "flashlight"
-  # ee_link_name: "light_beam"
+  ee_link_name: "light_beam"
 
   # # General Settings
   resolution: 0.01
@@ -39,9 +40,10 @@ planner:
   prm:
     num_neighbors: 7
     num_samples: 50
+    max_goals: 10
     # 0 = LINEAR, 1 = BINARY_SEARCH
     edge_validation_method: 1
-    max_size: 10000
+    max_size: 3000
 
   visibility_integrity_params:
     num_samples: 1000

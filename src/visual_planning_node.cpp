@@ -80,6 +80,7 @@ public:
         pnh_.param("planner/prm/edge_validation_method", edge_method_int, 1);
         prm.edge_validation_method = static_cast<visual_planner::EdgeCheckMode>(edge_method_int);
         pnh_.param("planner/prm/max_size", prm.max_size, 10000);
+        pnh_.param("planner/prm/max_goals", prm.max_goals, 10);
 
         planner_->setPRMParams(prm);
 
@@ -207,9 +208,19 @@ public:
 
         bool success = false;
         if (mode.find("PRM") != std::string::npos) {
-             success = planner_->planVisPRM();
+            visual_planner::Sampler& sampler = planner_->getSampler();
+            visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
+            std::vector<double> start;
+            bool found_random_start = false;
+
+            while (!found_random_start) {
+                start = sampler.sampleUniform();
+                found_random_start = validity_checker.isValid(start);
+            } 
+
+            success = planner_->planVisPRM(start);
         } else {
-             success = planner_->planVisRRT();
+            success = planner_->planVisRRT();
         }
 
         res.success = success;

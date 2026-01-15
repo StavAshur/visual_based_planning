@@ -103,7 +103,8 @@ public:
         // Which is a sphere with center (0.33, 0.0, 0.33) - the arm base,
         // radius 1.2 which is the arm length, and above z=0 which is the floor
         // Define Ball parameters
-        Eigen::Vector3d ball_center(0.33, 0.0, 0.33);
+        // Eigen::Vector3d ball_center(0.33, 0.0, 0.33);
+        Eigen::Vector3d ball_center(0.0, 0.0, 0.0);
         double ball_radius = 1.2;
 
         // Vector logic: P(t) = a + t * u, for t in [0, 1]
