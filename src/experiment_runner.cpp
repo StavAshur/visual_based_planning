@@ -70,8 +70,8 @@ public:
         generateTargetProblems();
 
         std::vector<ExperimentConfig> configs = {
-            {"RRT_VisualIK_ON",  "VisRRT", true,  false},
-            {"RRT_VisualIK_OFF", "VisRRT", false, false},
+            // {"RRT_VisualIK_ON",  "VisRRT", true,  false},
+            // {"RRT_VisualIK_OFF", "VisRRT", false, false},
             // {"PRM_VisualIK_ON_Integrity_ON",   "VisPRM", true,  true},
             // {"PRM_VisualIK_ON_Integrity_OFF",  "VisPRM", true,  false},
             {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true},
@@ -281,7 +281,7 @@ private:
             }
             file << "\n";
 
-            file << "Raw Times (Run 0 to 99): " << res.first_run_time;
+            file << "Raw Times (Run 0 to 99): ";
             for (double t : res.all_times) {
                 file << ", " << t;
             }

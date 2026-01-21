@@ -43,11 +43,11 @@ planner:
     max_goals: 10
     # 0 = LINEAR, 1 = BINARY_SEARCH
     edge_validation_method: 1
-    max_size: 3000
+    max_size: 5000
 
   visibility_integrity_params:
     num_samples: 1000
-    vi_threshold: 0.7
+    vi_threshold: 0.6
     k_neighbors: 5
     limit_diameter_factor: 2.0
     face_samples: 10

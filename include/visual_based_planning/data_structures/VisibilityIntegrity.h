@@ -83,6 +83,7 @@ public:
             std::cerr << "[VisibilityIntegrity] Error: Oracle or Sampler not set." << std::endl;
             return;
         }
+        ros::WallTime start_time = ros::WallTime::now();
 
         std::cout << "[VisibilityIntegrity] Building Visibility Integrity Tree..." << std::endl;
         
@@ -105,7 +106,10 @@ public:
         
         ComputeLeafPairwiseVisibility();
         ComputeParentVisibilityBottomUp(root_.get());
-        std::cout << "[VisibilityIntegrity] Tree built. Leaves: " << leaves_.size() << std::endl;
+
+        double elapsed = (ros::WallTime::now() - start_time).toSec();
+
+        ROS_WARN("[VisibilityIntegrity] Tree built in %f seconds. Number of leaves: %zu", elapsed, leaves_.size());
 
     }
 
@@ -344,8 +348,8 @@ private:
         // Calculate size early for logging
         Eigen::Vector3d box_size = getSize(node->box);
 
-        ROS_INFO("[Node %s] Processing ID: %d | Bounds: [%.2f, %.2f, %.2f]", 
-                idx.c_str(), node_counter, box_size.x(), box_size.y(), box_size.z());
+        // ROS_INFO("[Node %s] Processing ID: %d | Bounds: [%.2f, %.2f, %.2f]", 
+        //         idx.c_str(), node_counter, box_size.x(), box_size.y(), box_size.z());
 
         // 1. Sample S_in (Valid points inside current box)
         std::vector<Eigen::Vector3d> S_in;
@@ -493,7 +497,7 @@ private:
                 leaf_counter++;
             }
             
-            ROS_INFO("[Node %s] Finished processing children. Height set to %d", idx.c_str(), node->height);
+            // ROS_INFO("[Node %s] Finished processing children. Height set to %d", idx.c_str(), node->height);
         }
         return true;
     }
@@ -863,8 +867,8 @@ private:
 
 
     bool intersectsWorkspaceSphere(BoundingBox& b){
-        // double cx = 0.33, cy = 0.0, cz = 0.33;
-        double cx = 0.0, cy = 0.0, cz = 0.0;
+        double cx = 0.33, cy = 0.0, cz = 0.33;
+        // double cx = 0.0, cy = 0.0, cz = 0.0;
         double r_sq = 1.2 * 1.2;
         double dist_sq = 0.0;
 
