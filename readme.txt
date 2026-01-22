@@ -3,7 +3,7 @@
 =================================================================
 
 Test communication using command
-"ping administrator@192.168.131.1"
+"ping 192.168.131.1"
 
 SSH using the command
 "ssh administrator@192.168.131.1"
@@ -58,6 +58,11 @@ to allow distrobox VMs to access ethernet socket
     "export ROS_IP=192.168.131.100"
     "export ROS_IP=192.168.131.101"
 
+  For convinience:
+    "export ROS_MASTER_URI=http://192.168.131.1:11311 && export ROS_IP=192.168.131.100"
+    "export ROS_MASTER_URI=http://192.168.131.1:11311 && export ROS_IP=192.168.131.101"
+
+
   5.3 For visualization of the robot in RViz:
   "roslaunch husky_viz view_robot.launch"
 
@@ -77,6 +82,11 @@ to allow distrobox VMs to access ethernet socket
 
 
 The order matters! The scene must be loaded after the service is launched.
+
+
+roslaunch zed_color_tracker tracker.launch
+/usr/local/zed/tools/ZED_Depth_Viewer
+roslaunch viz_markers_pkg markers.launch 
 
 
 =================================================================
@@ -291,89 +301,3 @@ I can probably change it to 1.0.10 by checking out the right branch.
 
 This is obviously very bad, but I hope it's good enough.
 
-
-
-
-
-
-
- - Component 0 Rep (Node 0): [3.13782, -2.41149, 0.584965, 0.152053, 0.821841, -1.34837]
-  - Component 1 Rep (Node 2): [3.33608, 4.67286, -0.518783, -1.05555, -0.343301, -4.71873]
-  - Component 2 Rep (Node 46): [2.39969, -5.69715, -2.05057, 4.32422, -5.75655, 4.45281]
-  - Component 3 Rep (Node 63): [4.29331, -6.15856, 0.649159, 3.12658, -1.11941, 4.00892]
-  - Component 4 Rep (Node 151): [1.87886, -6.14476, -1.3781, 0.780621, -4.22297, -1.74058]
-  - Component 5 Rep (Node 180): [-3.78558, -5.98573, -1.65987, -1.65755, 6.04333, 2.24113]
-  - Component 6 Rep (Node 209): [-3.03642, -6.04028, -0.967256, 6.19359, 3.39698, 3.44715]
-  - Component 7 Rep (Node 226): [-4.11525, -6.10683, 0.453848, -1.25043, 0.0914494, -4.1517]
-  - Component 8 Rep (Node 265): [2.2502, -6.22571, -0.315097, 1.32353, 2.31204, 2.39591]
-  - Component 9 Rep (Node 329): [-3.91975, -5.99954, 1.02421, 2.95535, -1.79373, 4.50133]
-  - Component 10 Rep (Node 335): [2.54622, -6.19639, 1.54031, 0.123591, 5.66623, -2.61546]
-  - Component 11 Rep (Node 352): [2.26916, -5.97946, 1.62427, -3.70953, -5.94414, -6.25212]
-  - Component 12 Rep (Node 410): [2.23727, -6.00004, -0.15243, 4.20433, -2.66725, -5.2401]
-  - Component 13 Rep (Node 455): [2.43855, -5.97513, -2.6715, -6.17644, 6.05903, -1.80774]
-  - Component 14 Rep (Node 524): [4.76725, -6.16248, -1.24662, -2.61913, 3.30779, -1.05568]
-  - Component 15 Rep (Node 581): [-3.65027, -6.14262, -2.10115, -5.75021, 5.17424, -4.66297]
-  - Component 16 Rep (Node 621): [-2.09598, -6.15497, 0.40347, 0.797986, 4.95432, -4.01048]
-  - Component 17 Rep (Node 702): [-3.93229, -5.92921, 0.96234, 1.02761, -6.21814, 1.48479]
-  - Component 18 Rep (Node 704): [0.871409, -6.17476, -0.198527, -1.87143, -0.561917, 0.486362]
-  - Component 19 Rep (Node 1008): [-2.95432, -6.23111, 0.151607, 4.47046, -4.92966, -1.17288]
-  - Component 20 Rep (Node 1059): [2.38414, -5.87439, 1.50124, -5.94094, -1.39106, 1.0219]
-  - Component 21 Rep (Node 1159): [4.02854, -6.22066, -1.27311, -0.819099, 0.472179, -4.6776]
-  - Component 22 Rep (Node 1233): [0.744713, -2.30517, -1.36903, -5.94459, -2.72798, -4.89949]
-  - Component 23 Rep (Node 1266): [-3.5072, -5.8975, -1.6634, 4.98032, -0.201978, -4.47252]
-  - Component 24 Rep (Node 1267): [-3.23804, -6.25701, -0.688023, -3.6577, -2.79987, -2.59206]
-  - Component 25 Rep (Node 1350): [-2.30578, -6.13965, -2.83046, -6.13757, 0.720081, 2.28462]
-  - Component 26 Rep (Node 1361): [-3.15772, -6.24194, -2.45636, 6.02618, 0.108983, 1.39276]
-  - Component 27 Rep (Node 1399): [-0.158624, -1.46619, 2.44467, -0.734972, 5.28077, 6.07958]
-  - Component 28 Rep (Node 1447): [1.86654, -2.75153, 0.690709, -5.95408, -2.52136, -0.564408]
-  - Component 29 Rep (Node 1475): [-4.31625, -5.86393, 0.922425, 0.74648, -0.619714, -5.37988]
-  - Component 30 Rep (Node 1491): [-5.23707, -6.21481, 0.756844, -1.2127, -3.24912, 5.00744]
-  - Component 31 Rep (Node 1513): [-3.82559, -6.03263, -0.530569, 0.575257, -3.16407, -1.73369]
-  - Component 32 Rep (Node 1569): [1.21213, 5.00909, 0.68409, -6.09427, -2.07526, 0.927701]
-  - Component 33 Rep (Node 1605): [-3.71214, -6.23992, 1.69145, 0.303459, 2.65357, 4.72302]
-  - Component 34 Rep (Node 1702): [3.13782, -2.41149, 0.584965, 0.152053, 0.821841, -1.34837]
-  - Component 35 Rep (Node 1705): [1.49606, -6.19218, 0.36003, 2.6708, 4.62112, 4.0785]
-  - Component 36 Rep (Node 1731): [0.615573, 3.05682, 1.77823, -6.09464, -2.3624, 5.34495]
-  - Component 37 Rep (Node 1744): [-4.48707, -6.17113, -2.32415, 3.17644, -4.92909, -5.1771]
-  - Component 38 Rep (Node 1770): [2.13752, -5.6785, 0.384154, -1.55614, 1.49725, 3.40941]
-  - Component 39 Rep (Node 1840): [2.33743, -5.73727, -2.51291, 3.18104, -1.37381, 0.0963526]
-  - Component 40 Rep (Node 1868): [4.13305, -6.15762, 0.274725, -1.01496, 3.67075, 0.956959]
-  - Component 41 Rep (Node 1991): [4.10005, -0.607748, -0.0965736, -6.04745, -2.57213, 1.1544]
-  - Component 42 Rep (Node 2004): [-3.05052, -6.18799, -2.04114, 3.81547, -6.0373, 1.35121]
-  - Component 43 Rep (Node 2043): [2.65746, 0.345224, 1.16413, -5.84007, 3.54049, -3.43262]
-  - Component 44 Rep (Node 2119): [-4.0961, 0.67059, 0.815939, 2.59297, 6.07331, -0.661349]
-  - Component 45 Rep (Node 2121): [1.29792, -6.14973, -0.283729, -2.1039, -4.53543, 1.45405]
-  - Component 46 Rep (Node 2159): [-4.93466, 3.41704, 1.60755, -6.02781, -2.78724, -1.64042]
-  - Component 47 Rep (Node 2174): [3.11552, -6.09567, -2.29258, -4.97017, 1.98655, 5.94504]
-  - Component 48 Rep (Node 2290): [-2.12019, -6.18581, -2.48302, 5.53345, -1.34226, 5.42327]
-  - Component 49 Rep (Node 2354): [-4.13199, 0.677369, -0.0750637, 4.43194, 5.06915, -5.74024]
-  - Component 50 Rep (Node 2423): [-2.89988, -6.25963, -2.75562, -5.68158, 5.63929, 1.15803]
-  - Component 51 Rep (Node 2433): [-2.53519, -6.22462, -1.57111, 2.48292, 5.10544, 6.11367]
-  - Component 52 Rep (Node 2454): [-4.13739, -6.23924, 0.129058, 2.44059, -5.75184, 3.09321]
-
-
-rostopic pub -1 /joint_states sensor_msgs/JointState "header:
-  seq: 0
-  stamp: {secs: 0, nsecs: 0}
-  frame_id: ''
-name: ['ur_arm_shoulder_pan_joint', 'ur_arm_shoulder_lift_joint', 'ur_arm_elbow_joint', 'ur_arm_wrist_1_joint', 'ur_arm_wrist_2_joint', 'ur_arm_wrist_3_joint']
-position: [0.615573, 3.05682, 1.77823, -6.09464, -2.3624, 5.34495]
-velocity: []
-effort: []"
-
-python -c 'import sys, rospy, moveit_commander; \
-moveit_commander.roscpp_initialize(sys.argv); \
-rospy.init_node("cmd_move", anonymous=True); \
-group = moveit_commander.MoveGroupCommander("manipulator"); \
-group.go([-3.05052, -6.18799, -2.04114, 3.81547, -6.0373, 1.35121], wait=True)'
-
-I have decided to change the way I compute visible_from_nodes.
- Write a new recursive method that takes a root node and then travels up to the root
- ( I have added a VINode* parent variable in struct VINode), and at any node v up to the root 
- including) the method calls another method that traverses other side of the subtree
- rooted at the other child of v layer by layer (so in a BFS manner, not a DFS manner)
- and for every node if that node's convexity score
- (I have added a double convexity_score variable in struct VINode) is above 0.99,    
-
-
- Now write a function called ComputeNodeVisibility that we will use instead of foo. For an input node v ComputeNodeVisibility will traverse up the tree starting at the parent of v, and for 

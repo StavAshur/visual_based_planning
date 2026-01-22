@@ -115,8 +115,8 @@ public:
         // 1. Visual IK (Global)
         bool new_vis_ik = false;
         if (!nh_.getParam("/planner/use_visual_ik", new_vis_ik)) {
-            // If param missing, default to false
-            new_vis_ik = false;
+            // If param missing, default to true
+            new_vis_ik = true;
         }
 
         if (new_vis_ik != current_use_vis_ik_) {

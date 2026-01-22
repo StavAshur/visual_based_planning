@@ -487,6 +487,7 @@ public:
                 );
 
                 if (potential_vis > visibility_threshold_) {
+                    // ROS_INFO("VisRRT: Using VisIK to extend to goal");
                     // Try to snap
                     Eigen::Matrix3d look_at_rot = sampler_->computeLookAtRotation(current_pos, target_mes_.center);
 
