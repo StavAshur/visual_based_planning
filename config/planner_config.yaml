@@ -1,7 +1,7 @@
 planner:
-  mode: "VisRRT" # "VisRRT" or "VisPRM"
-  use_visual_ik: true
-  use_visibility_integrity: false
+  mode: "VisPRM" # "VisRRT" or "VisPRM"
+  use_visual_ik: false
+  use_visibility_integrity: true
   time_cap: 60 #seconds
 
   # Planning Group & Links
@@ -13,12 +13,12 @@ planner:
 
   # # General Settings
   resolution: 0.01
-  visibility_threshold: 0.75
+  visibility_threshold: 0.7
   workspace_bounds:
-    x_min: -3.0
-    x_max: 3.0
-    y_min: -3.0
-    y_max: 3.0
+    x_min: -2.0
+    x_max: 2.0
+    y_min: -2.0
+    y_max: 2.0
     z_min: -0.25
     z_max: 2.5
 

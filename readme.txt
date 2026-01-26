@@ -52,7 +52,7 @@ to allow distrobox VMs to access ethernet socket
   5.1 Got to catkin_ws and source ("source devel/setup.bash")
   5.2 If we want the commands to run from a non-ssh'd terminal - need to set the robot as ros master 
     "export ROS_MASTER_URI=http://192.168.131.1:11311"
-    "export ROS_IP=192.168.131.X" where X depends on the computer you're using.
+    "export ROS_IP=192.168.131.X" where X depends on the ethernet socket in the Husky?
 
     The two addresses I've seen are 100 and 101:
     "export ROS_IP=192.168.131.100"
@@ -195,6 +195,21 @@ points:
 - positions: [1.57, -1.57, 0.0, -1.57, 0.0, 0.0]
   time_from_start: {secs: 5, nsecs: 0}"
 "
+
+
+Using the moveit interface from the terminal:
+
+python -c "import sys, rospy, moveit_commander; \
+moveit_commander.roscpp_initialize(sys.argv); \
+rospy.init_node('cmd_line_mover', anonymous=True); \
+group = moveit_commander.MoveGroupCommander('manipulator'); \
+group.set_max_velocity_scaling_factor(0.1); \
+group.set_max_acceleration_scaling_factor(0.1); \
+goal = dict(zip(['ur_arm_shoulder_pan_joint','ur_arm_shoulder_lift_joint','ur_arm_elbow_joint','ur_arm_wrist_1_joint','ur_arm_wrist_2_joint','ur_arm_wrist_3_joint'], [0.0, -1.57, 0.0, -1.57, 3.14, 0.0])); \
+group.go(goal, wait=True); \
+moveit_commander.roscpp_shutdown()"
+
+
 
 =================================================================
 =========== Old irrelevant stuff I did when used OMPL ===========

@@ -21,6 +21,7 @@ private:
     bool current_use_vis_ik_;
     bool current_use_vi_;
     bool current_shortcutting_;
+    std::string current_mode_;
 
 public:
     VisualPlanningNode(planning_scene_monitor::PlanningSceneMonitorPtr psm) 
@@ -46,6 +47,8 @@ public:
     }
 
     void loadStaticConfig() {
+        pnh_.param<std::string>("planner/mode", current_mode_, "VisRRT");
+
         double resolution;
         pnh_.param<double>("planner/resolution", resolution, 0.05);
         planner_->setResolution(resolution);
@@ -59,6 +62,14 @@ public:
         pnh_.param("planner/workspace_bounds/z_max", bounds.z_max, 3.5);
         planner_->setWorkspaceBounds(bounds);
 
+        double visibility_threshold;
+        pnh_.param<double>("planner/visibility_threshold", visibility_threshold, 0.75);
+        planner_->setVisibilityThreshold(visibility_threshold);
+
+        bool use_visual_ik;
+        pnh_.param("planner/use_visual_ik", use_visual_ik, true);
+        planner_->setUseVisualIK(use_visual_ik);
+
         std::string group_name;
         pnh_.param<std::string>("planner/group_name", group_name, "manipulator");
         planner_->setGroupName(group_name);
@@ -66,6 +77,7 @@ public:
         std::string ee_link;
         pnh_.param<std::string>("planner/ee_link_name", ee_link, "tool0");
         planner_->setEELinkName(ee_link);
+
 
         visual_planner::RRTParams rrt; 
         pnh_.param("planner/rrt/goal_bias", rrt.goal_bias, 0.1);
@@ -96,6 +108,9 @@ public:
         pnh_.param("planner/time_cap", time_cap, 120); // Default to 120 if missing
         planner_->setTimeCap(time_cap);
 
+        bool use_visibility_integrity;
+        pnh_.param("planner/use_visibility_integrity", use_visibility_integrity, true);
+        planner_->setUseVisibilityIntegrity(use_visibility_integrity);
 
         visual_planner::VisibilityIntegrityParams vi_params; // Initialized with defaults from Types.h
         pnh_.param("planner/visibility_integrity_params/num_samples", vi_params.num_samples, vi_params.num_samples);
@@ -116,7 +131,7 @@ public:
         bool new_vis_ik = false;
         if (!nh_.getParam("/planner/use_visual_ik", new_vis_ik)) {
             // If param missing, default to true
-            new_vis_ik = true;
+            new_vis_ik = false;
         }
 
         if (new_vis_ik != current_use_vis_ik_) {
@@ -150,6 +165,16 @@ public:
             current_shortcutting_ = new_shortcutting;
             changed_this_cycle = true;
             ROS_INFO("Param Changed: enable_shortcutting -> %s", new_shortcutting ? "TRUE" : "FALSE");
+        }
+
+        // 4. Mode (Global)
+        std::string new_mode;
+        if (pnh_.getParam("planner/mode", new_mode)) {
+            if (new_mode != current_mode_) {
+                current_mode_ = new_mode;
+                changed_this_cycle = true;
+                ROS_INFO("Param Changed: planner/mode -> %s", current_mode_.c_str());
+            }
         }
 
         // Update the member flag if any change occurred
@@ -197,28 +222,29 @@ public:
         }
 
         // 4. Determine Mode (Global Param)
-        std::string mode;
+        std::string mode = current_mode_; // Default to what we read from config/param server
+        
+        // If client overrides it in the request, use that
         if (!req.planner_type.empty()) {
              mode = req.planner_type;
-        } else {
-             nh_.param<std::string>("/planner/mode", mode, "VisRRT");
         }
 
         ROS_WARN("Executing Planner with Mode: %s", mode.c_str());
 
         bool success = false;
         if (mode.find("PRM") != std::string::npos) {
-            visual_planner::Sampler& sampler = planner_->getSampler();
-            visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
-            std::vector<double> start;
-            bool found_random_start = false;
+            // visual_planner::Sampler& sampler = planner_->getSampler();
+            // visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
+            // std::vector<double> start;
+            // bool found_random_start = false;
 
-            while (!found_random_start) {
-                start = sampler.sampleUniform();
-                found_random_start = validity_checker.isValid(start);
-            } 
+            // while (!found_random_start) {
+            //     start = sampler.sampleUniform();
+            //     found_random_start = validity_checker.isValid(start);
+            // } 
 
-            success = planner_->planVisPRM(start);
+            // success = planner_->planVisPRM(start);
+            success = planner_->planVisPRM();
         } else {
             success = planner_->planVisRRT();
         }

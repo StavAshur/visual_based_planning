@@ -410,6 +410,7 @@ public:
         std::uniform_real_distribution<double> dist_01(0.0, 1.0);
 
         ROS_INFO("Starting VisRRT...");
+        ROS_INFO("visibility threshold is %f", visibility_threshold_);
         ros::WallTime start_time = ros::WallTime::now();
         // 1. Main Loop
         for (int i = 0; i < rrt_params_.max_iterations; ++i) {
@@ -519,12 +520,28 @@ public:
     // 4. PRM Implementation
     // ========================================================================
 
+    bool planVisPRM() {
+
+        // Use member variable start_joint_values_
+        if (start_joint_values_.empty()) {
+            ROS_ERROR("Start joint values not set!");
+            return false;
+        }
+
+        if (!validity_checker_->isValid(start_joint_values_)) {
+            ROS_ERROR("Start state is invalid!");
+            return false;
+        }
+        return planVisPRM(start_joint_values_);
+    }
+
     bool planVisPRM(std::vector<double> start_joint_values) {
         
         if (start_joint_values.empty()) { ROS_ERROR("Start joint values not set!"); return false; }
         
         // 1. Add Start Configuration
-        VertexDesc root_id = addState(start_joint_values);     
+        VertexDesc root_id = addState(start_joint_values);  
+
         
         size_t start_num_neighbors = (graph_.getNumVertices() > 100) ? prm_params_.num_neighbors : 
                                                                         prm_params_.num_neighbors * 3 ;

@@ -91,13 +91,10 @@ public:
         Eigen::Vector3d b = c - (r / std::tan(theta / 2.0)) * v;
         double seg_length = (b - a).norm();
 
-
-        ROS_INFO("h=%f, theta=%f \n Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
+        ROS_INFO("Before intersection: h=%f, theta=%f \n Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
                 h, theta,
                 a.x(), a.y(), a.z(),
                 b.x(), b.y(), b.z());
-
-
 
         // Intersecting the segment with the reachable volume of the robot
         // Which is a sphere with center (0.33, 0.0, 0.33) - the arm base,
@@ -137,6 +134,13 @@ public:
         Eigen::Vector3d a_orig = a;
         a = a_orig + t_start * u;
         b = a_orig + t_end * u;
+
+
+        ROS_INFO("After intersection: h=%f, theta=%f \n Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
+                h, theta,
+                a.x(), a.y(), a.z(),
+                b.x(), b.y(), b.z());
+
 
         // --- Intersection with Half-Space Z >= 0 (Floor) ---
         

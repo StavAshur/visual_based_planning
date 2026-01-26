@@ -27,36 +27,26 @@ int main(int argc, char** argv)
   client.waitForExistence();
   ROS_INFO("Service available.");
 
-  // 2. Load Parameters
-  std::string yaml_path;
-  if (!pnh.getParam("targets_yaml", yaml_path)) {
-    // Fallback or error
-    if (!nh.getParam("targets_yaml", yaml_path)) {
-        ROS_ERROR("Missing param 'targets_yaml'.");
-        return 1;
-    }
-  }
-  
+
+
+
+// 2. Determine Planner Type (Mode)
   std::string planner_type;
-  // pnh.param<std::string>("planner_type", planner_type, "VisRRT"); // Default to RRT
-
-  // 3. Load Targets from YAML
-  YAML::Node config;
-  try {
-    config = YAML::LoadFile(yaml_path);
-  } catch (const std::exception& e) {
-    ROS_ERROR("Failed to load YAML file: %s", e.what());
-    return 1;
+  
+  // Priority 1: Check if the client itself has a private param set (e.g. from command line)
+  if (!pnh.getParam("mode", planner_type)) {
+      // Priority 2: Check the global param server where the Node likely loaded its config
+      // Based on your launch file, the node name is "visual_planning_node"
+      if (!nh.getParam("/visual_planning_node/planner/mode", planner_type)) {
+          // Priority 3: Default
+          planner_type = "VisRRT"; 
+      }
   }
 
-  // if (!config["target_points"]) {
-  //   ROS_ERROR("YAML missing 'target_points'");
-  //   return 1;
-  // }
-
-  // 4. Prepare Request
+  // 3. Prepare Request
   visual_based_planning::PlanVisibilityPath srv;
-  // srv.request.planner_type = planner_type;
+  srv.request.planner_type = planner_type; // Pass the mode to the server
+
 
 
   std::vector<float> points_flat;
