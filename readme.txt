@@ -83,9 +83,18 @@ to allow distrobox VMs to access ethernet socket
 
 The order matters! The scene must be loaded after the service is launched.
 
+  7. Zed camera is set to observe the workspace and populate the parameter /target_points
+    with the coordinates of the targets w.r.t. the robot's pose, which is determined by
+    observing the QR code. Some important details:
+    7.1 Activation of the setup is "roslaunch zed_color_tracker tracker.launch"
+    7.2 The QR code is ID 42 in ArUco DICT_6X6_250
+    7.3 The target points are all pixels with some color, where the color is declared in colors.yaml
+      as a range of values. Currently set to red. 
+    7.4 For debugging use the depth viewer to see what the camera sees: "/usr/local/zed/tools/ZED_Depth_Viewer"
+    7.5 The USB extension is the cause of many bugs. Make sure it is properly connected.
 
-roslaunch zed_color_tracker tracker.launch
-/usr/local/zed/tools/ZED_Depth_Viewer
+
+
 roslaunch viz_markers_pkg markers.launch 
 
 
@@ -197,7 +206,7 @@ points:
 "
 
 
-Using the moveit interface from the terminal:
+Using the moveit interface from the terminal to move the robot to start position:
 
 python -c "import sys, rospy, moveit_commander; \
 moveit_commander.roscpp_initialize(sys.argv); \

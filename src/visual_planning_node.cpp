@@ -116,8 +116,6 @@ public:
         pnh_.param("planner/visibility_integrity_params/num_samples", vi_params.num_samples, vi_params.num_samples);
         pnh_.param("planner/visibility_integrity_params/vi_threshold", vi_params.vi_threshold, vi_params.vi_threshold);
         pnh_.param("planner/visibility_integrity_params/k_neighbors", vi_params.k_neighbors, vi_params.k_neighbors);
-        pnh_.param("planner/visibility_integrity_params/limit_diameter_factor", vi_params.limit_diameter_factor, vi_params.limit_diameter_factor);
-        pnh_.param("planner/visibility_integrity_params/face_samples", vi_params.face_samples, vi_params.face_samples);
         
         // Pass to planner
         planner_->setVisibilityIntegrityParams(vi_params);

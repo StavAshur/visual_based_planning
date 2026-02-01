@@ -469,6 +469,8 @@ public:
             
             if (current_vis > visibility_threshold_) {
                 ROS_WARN("VisRRT: Found solution via direct visibility.");
+                double elapsed = (ros::WallTime::now() - start_time).toSec();
+                ROS_WARN("VisRRT: success in %.2f seconds", elapsed);
                 std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, q_new_id);
                 result_path_.clear();
                 finalizePath(root_id, q_new_id);
@@ -501,6 +503,8 @@ public:
                                 graph_.addEdge(q_new_id, goal_id, distance(q_new, q_snapped));
                                 
                                 ROS_WARN("VisRRT: Found solution via VisualIK snap.");
+                                double elapsed = (ros::WallTime::now() - start_time).toSec();
+                                ROS_WARN("VisRRT: success in %.2f seconds", elapsed);
                                 std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, goal_id);
                                 result_path_.clear();
                                 finalizePath(root_id, goal_id);
@@ -643,6 +647,8 @@ public:
                 std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, g_id);
                 if (!path_idx.empty()) {
                     ROS_WARN("VisPRM: Found solution via visibility integrity!");
+                    double elapsed = (ros::WallTime::now() - start_time).toSec();
+                    ROS_WARN("VisPRM: success in %.2f seconds", elapsed);
                     finalizePath(root_id, g_id);
                     return true;
                 }
@@ -678,6 +684,8 @@ public:
                                 std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, v_id);
                                 if (!path_idx.empty()) {
                                     ROS_WARN("VisPRM: Found solution via roadmap expansion!");
+                                    double elapsed = (ros::WallTime::now() - start_time).toSec();
+                                    ROS_WARN("VisPRM: success in %.2f seconds", elapsed);
                                     finalizePath(root_id, v_id);
                                     return true;
                                 }

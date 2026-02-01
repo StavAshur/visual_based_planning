@@ -88,7 +88,7 @@ public:
 
         // Compute valid segment [a, b] along v
         Eigen::Vector3d a = c - (h - r) * v;
-        Eigen::Vector3d b = c - (r / std::tan(theta / 2.0)) * v;
+        Eigen::Vector3d b = c - (r / std::tan(theta)) * v;
         double seg_length = (b - a).norm();
 
         ROS_INFO("Before intersection: h=%f, theta=%f \n Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
@@ -203,6 +203,10 @@ public:
             // Step in +dir (Closer to target)
             Eigen::Vector3d p_plus = p_prime + (i * step_size_positive * dir);
             test_pose.translation() = p_plus;
+
+            if (validity_checker_->isPointInObstacle(p_plus[0], p_plus[1], p_plus[2]))
+                continue;
+
             robot_state_->setJointGroupPositions(group_name_, current_joints); 
             if (checkIK(test_pose, solution_out)) return true;
 
