@@ -39,6 +39,8 @@ namespace visual_planner {
         int num_samples = 1000;
         double vi_threshold = 0.7;
         int k_neighbors = 5;
+        int face_samples = 16;
+        double limit_diameter_factor = 0.5;
     };
     
 

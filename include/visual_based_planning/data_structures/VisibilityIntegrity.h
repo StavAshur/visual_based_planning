@@ -10,8 +10,6 @@
 #include <unordered_set>
 #include <random>
 #include <map>
-#include <queue>
-#include <numeric>
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -20,40 +18,31 @@
 #include "VisibilityOracle.h"
 #include "NearestNeighbor.h"
 #include "Graph.h"
-#include "../common/Types.h" 
+#include "../common/Types.h"
 #include "../components/Sampler.h"
 
 namespace visual_planner {
 
-struct VINode {
-    int id;                 // Unique ID
-    BoundingBox box;        // The bounding box
-    std::string path_idx;   // "0", "01", etc. (for debugging)
-    
-    std::unique_ptr<VINode> left = nullptr;
-    std::unique_ptr<VINode> right = nullptr;
-    VINode* parent = nullptr;
-    
-    
-    bool is_leaf = false;
-    int index = -1;    // If leaf, index in the graph
-
-    int height = 0; // 0 for leaves, 1+ for internal
-    std::vector<std::pair<VINode*, double>> visible_from_nodes; // IDs of nodes this node sees + visibility score
-    double convexity_score = 0.0;
-    bool visibility_computed = false;
-};
-
 class VisibilityIntegrity {
 public:
-    VisibilityIntegrityParams params_;
+    struct Cluster {
+        int id;
+        Eigen::Vector3d center; // Geometric centroid of the cluster
+        double radius;          // Radius of the cluster
+        int size_;              // Number of points in the cluster
+        std::vector<int> member_indices; // Indices of workspace samples belonging to this cluster
+        
+        // REFACTORED: These now store indices of *workspace samples* visible from the cluster
+        std::vector<int> visible_samples_intersection; // Cached Intersection of Vis(p)
+        std::vector<int> visible_samples_union;        // Cached Union of Vis(p)
+    };
 
+VisibilityIntegrityParams params_;
+
+
+public:
     VisibilityIntegrity() 
-        : params_(), rng_(std::random_device{}()) 
-    {
-        // Default bounds
-        workspace_bounds_ = {-2.0, 2.0, -2.0, 2.0, 0.0, 2.0};
-    }
+        : params_(), rng_(std::random_device{}()) {}
 
     void setVisibilityOracle(std::shared_ptr<VisibilityOracle> oracle) {
         vis_oracle_ = oracle;
@@ -80,894 +69,636 @@ public:
      */
     void build() {
         if (!vis_oracle_ || !sampler_) {
-            std::cerr << "[VisibilityIntegrity] Error: Oracle or Sampler not set." << std::endl;
+            ROS_ERROR("[VisibilityIntegrity] Error: Oracle or Sampler not set.");
             return;
         }
-        ros::WallTime start_time = ros::WallTime::now();
-
-        std::cout << "[VisibilityIntegrity] Building Visibility Integrity Tree..." << std::endl;
         
-        leaves_.clear();
-        int node_counter = 0;
-        int leaf_counter = 0;
-
-        // Initial Convexity Check
-        // Use Sampler to get obstacle-free points in the whole workspace
-        std::vector<Eigen::Vector3d> S;
-        sampler_->sampleInBox(workspace_bounds_, params_.num_samples, S);
+        // 1. Sample Points
+        std::cout << "[VisibilityIntegrity] Sampling " << params_.num_samples << " valid points..." << std::endl;
+        workspace_samples_.clear();
+        sampler_->sampleValidPoints(params_.num_samples, workspace_samples_, params_.face_samples);
         
-        root_ = std::make_unique<VINode>();
-        root_->box = workspace_bounds_;
-        root_->path_idx = "";
-        root_->id = node_counter++;
+        // 2. Precompute Visibility between Samples (New Definition of Vis(p))
+        std::cout << "[VisibilityIntegrity] Computing sample-to-sample visibility..." << std::endl;
+        computeSampleVisibility();
 
-        buildTreeRecursive(root_.get(), workspace_bounds_, "0", node_counter, leaf_counter);
-        // ComputeTreeVisibility(root_.get());
+        // 3. Cluster based on VI
+        std::cout << "[VisibilityIntegrity] Clustering..." << std::endl;
+        performClustering();
+
+        // 4. Build Cluster Visibility Graph
+        std::cout << "[VisibilityIntegrity] Building Cluster Visibility Graph for " << clusters_.size() << " clusters..." << std::endl;
+        buildClusterVisibilityGraph();
         
-        ComputeLeafPairwiseVisibility();
-        ComputeParentVisibilityBottomUp(root_.get());
-
-        double elapsed = (ros::WallTime::now() - start_time).toSec();
-
-        ROS_WARN("[VisibilityIntegrity] Tree built in %f seconds. Number of leaves: %zu", elapsed, leaves_.size());
-
+        // Build NN structure for points (All Samples)
+        point_nn_.clear();
+        for (size_t i = 0; i < workspace_samples_.size(); ++i) {
+            std::vector<double> pt_vec = {workspace_samples_[i].x(), workspace_samples_[i].y(), workspace_samples_[i].z()};
+            point_nn_.addPoint(pt_vec, i); // Store index as ID
+        }
     }
 
 
-    /**
-     * @brief Samples a point that can see the target 'ball' with high probability.
-     * Uses the "visible_from_nodes" list (Inverse Visibility) to find promising candidates.
+
+/**
+     * @brief Samples a point from the visibility region of the cluster containing 'point'.
+     * 1. Classify 'point' to find its cluster C.
+     * 2. Get neighbor clusters N_VG(C) from cluster visibility graph.
+     * 3. Select one cluster from N_VG(C) via weighted sampling (size-based).
+     * 4. Sample a valid point from that cluster's sphere.
+     * 5. Verify sampled point belongs to the cluster and sees input point.
      */
-    bool SampleFromVisibilityRegion(const Ball& ball, Eigen::Vector3d& sampled_point, double visibility_threshold) {
-        // 1. Find the leaf that contains the target Ball's center
-        std::vector<std::pair<VINode*, double>> seers;
-        query(ball, seers);
+    bool SampleFromVisibilityRegion(const Eigen::Vector3d& point, Eigen::Vector3d& sampled_point) {
+        // ROS_WARN("Attempting sampling from visibility region..."); // Optional logging
+        // 1. Find cluster for the input point
+        int start_cluster_id = query(point);
+        if (start_cluster_id == -1) return false;
+        // 2. Get neighbor clusters 
+        const std::vector<std::pair<int, double>>& candidate_clusters = cluster_vis_graph_[start_cluster_id];
+        
+        if (candidate_clusters.empty()) return false;
 
-        if (seers.empty()) {
-            // ROS_WARN("[SampleFromVisibilityRegion] no one sees this point????");
-            return false;
-        }
+        // 3. Sample Loop with rejection sampling
+        int chosen_cluster_id = -1;
+    
+        int max_attempts = 100;
+        std::uniform_real_distribution<double> sample_dist(-1.0, 1.0);
+        std::uniform_real_distribution<> reject_dist(0.0, 1.0);
+        std::uniform_int_distribution<> dist_idx(0, candidate_clusters.size() - 1);
 
-        // ROS_INFO("[SampleFromVisibilityRegion] Query success! Found %d seers.", (int)seers.size());
-        // for (size_t i = 0; i < seers.size(); ++i) {
-        //     ROS_INFO("  -> Seer [%d]: Node ID %d | Intersection Vol: %.4f", 
-        //              (int)i, 
-        //              seers[i].first->id, 
-        //              seers[i].second);
-        // }
-
-        // 2. Rejection Sampling Loop
-        int max_attempts = 1000;
-        std::uniform_int_distribution<> dist_idx(0, seers.size() - 1);
-        std::uniform_real_distribution<double> dist_prob(0.0, 1.0);
 
         for (int i = 0; i < max_attempts; ++i) {
-            // A. Pick a random candidate node from the list
-            int rand_idx = dist_idx(rng_);
-            const auto& candidate_pair = seers[rand_idx];
+            // Pick a cluster
+            int candidate_idx = dist_idx(rng_);
+            const auto& candidate_pair = candidate_clusters[candidate_idx];
+            int candidate_id = candidate_pair.first;
+            double weight = candidate_pair.second;
+
+            if (reject_dist(rng_) < weight)
+                chosen_cluster_id = candidate_id;
+            else {
+                continue;
             
-            VINode* seer_node = candidate_pair.first;
-            double intersection_volume = candidate_pair.second;
+            }
+            const Cluster& chosen_cluster = clusters_[chosen_cluster_id];
 
-            // B. Rejection Sampling: Reject with probability (1 - score)
-            // (i.e., Accept if random value < score)
-            if (dist_prob(rng_) > intersection_volume) {
-                continue; 
+            // Sample from sphere
+            Eigen::Vector3d offset;
+            do {
+                offset = Eigen::Vector3d(sample_dist(rng_), sample_dist(rng_), sample_dist(rng_));
+            } while (offset.squaredNorm() > 1.0);
+
+            Eigen::Vector3d candidate = chosen_cluster.center + offset * chosen_cluster.radius;
+
+            // --- MODIFICATION: Cluster Membership Check ---
+            // Ensure the geometric candidate actually belongs to the topological cluster
+            int candidate_actual_cluster = query(candidate);
+            if (candidate_actual_cluster != chosen_cluster_id) {
+                continue; // Reject if it falls into a different cluster's Voronoi region
             }
 
-            // C. Sample a point from the seer's bounding box
-            std::vector<Eigen::Vector3d> samples;
-            // sampleInBox ensures the point is within bounds and obstacle-free
-            if (!sampler_->sampleInBox(seer_node->box, 1, samples) || samples.empty()) {
-                continue; 
-            }
-            Eigen::Vector3d candidate_point = samples[0];
-
-            // D. Verify actual visibility against the Ball
-            // Returns fraction of ball visible from candidate_point
-            double visible_fraction = vis_oracle_->checkBallBeamVisibility(candidate_point, ball);
-
-            if (visible_fraction > visibility_threshold) {
-                sampled_point = candidate_point;
+            // 4. Verify Visibility: Candidate must see Input Point
+            if (vis_oracle_->checkVisibility(candidate, point)) {
+                sampled_point = candidate;
                 return true;
             }
+
         }
 
         return false;
     }
 
     /**
-     * @brief Finds the leaf containing the query point and populates the input vector
-     * with 'visible_from_nodes' from all ancestors along the path.
-     * * @param query_point The point to search for.
-     * @param out_seeing_nodes Output vector to populate with (node_id, score) pairs.
-     * @return int The leaf_index of the found leaf, or -1 if not found.
+     * @brief Samples a point from the visibility region of the cluster containing 'ball'.
+     * ... (Logic same as above, updated with membership check)
      */
-    VINode* query(const Eigen::Vector3d& query_point, std::vector<std::pair<VINode*, double>>& out_seeing_nodes) {
-        // Clear previous results to ensure the vector contains only relevant nodes
-        out_seeing_nodes.clear();
+    bool SampleFromVisibilityRegion(const Ball& ball, Eigen::Vector3d& sampled_point, double visibility_threshold) {
 
-        if (!root_) return nullptr;
+        // 1. Find cluster for the input ball using majority vote
+        std::map<int, int> cluster_votes;
+        std::uniform_real_distribution<double> dist_ball(-1.0, 1.0);
+        int ball_samples = 10;
 
-        // Helper lambda: Check if point is inside a box
-        auto contains = [](const BoundingBox& b, const Eigen::Vector3d& p) {
-            return (p.x() >= b.x_min && p.x() <= b.x_max &&
-                    p.y() >= b.y_min && p.y() <= b.y_max &&
-                    p.z() >= b.z_min && p.z() <= b.z_max);
-        };
-
-        // 1. Fast fail if outside the global workspace
-        if (!contains(root_->box, query_point)) {
-            return nullptr;
-        }
-
-        VINode* current = root_.get();
-
-        // 2. Traverse down to the leaf
-        while (current) {
-            // Accumulate visibility from the current node on the path
-            out_seeing_nodes.insert(
-                out_seeing_nodes.end(),
-                current->visible_from_nodes.begin(),
-                current->visible_from_nodes.end()
-            );
-
-            if (current->is_leaf) {
-                return current;
-            }
-
-            // Determine which child to traverse
-            if (current->left && contains(current->left->box, query_point)) {
-                current = current->left.get();
-            } 
-            else if (current->right && contains(current->right->box, query_point)) {
-                current = current->right.get();
-            } 
-            else {
-                // Point is within parent box but not strictly in children (gap/precision).
-                return nullptr; 
+        for (int i = 0; i < ball_samples; ++i) {
+            Eigen::Vector3d offset;
+            do {
+                offset = Eigen::Vector3d(dist_ball(rng_), dist_ball(rng_), dist_ball(rng_));
+            } while (offset.squaredNorm() > 1.0);
+            
+            Eigen::Vector3d sample_in_ball = ball.center + offset * ball.radius;
+            int cid = query(sample_in_ball);
+            if (cid != -1) {
+                cluster_votes[cid]++;
             }
         }
 
-        return nullptr;
-    }
+        if (cluster_votes.empty()) return false;
 
-/**
-     * @brief Populates 'out_seeing_nodes' with (Seer, IntersectionVolume) pairs.
-     * Traverses the tree to find nodes intersecting the ball.
-     * - If fully contained: IntersectionVolume = Box Volume.
-     * - If leaf (partial intersection): IntersectionVolume = Approx Sampled Volume.
-     */
-    void query(const Ball& ball, std::vector<std::pair<VINode*, double>>& out_seeing_nodes) {
-        out_seeing_nodes.clear();
-        if (!root_) return;
-
-        // Recursive traversal lambda
-        std::function<void(VINode*)> traverse = [&](VINode* node) {
-            if (!node) return;
-            // ROS_INFO("[BallQuery] Visiting Node ID: %d | Path: %s | Box: [%.2f, %.2f] [%.2f, %.2f] [%.2f, %.2f]", 
-            //          node->id, 
-            //          node->path_idx.c_str(),
-            //          node->box.x_min, node->box.x_max,
-            //          node->box.y_min, node->box.y_max,
-            //          node->box.z_min, node->box.z_max);
-            // 1. Check Intersection (Pruning)
-            // If the box is completely outside the ball radius, skip it.
-            double d2 = distSqPointBox(ball.center, node->box);
-            if (d2 > ball.radius * ball.radius) {
-                // ROS_INFO("   -> Pruned: Box is outside ball radius.");
-                return; 
+        int start_cluster_id = -1;
+        int max_votes = -1;
+        for (const auto& pair : cluster_votes) {
+            if (pair.second > max_votes) {
+                max_votes = pair.second;
+                start_cluster_id = pair.first;
             }
+        }
 
-            bool fully_contained = isBoxFullyInBall(node->box, ball);
-            // if (fully_contained) ROS_INFO("   -> Status: Fully Contained.");
-            // else if (node->is_leaf) ROS_INFO("   -> Status: Leaf Intersecting.");
-            // else ROS_INFO("   -> Status: Partial Intersection (Internal).");
-            // 2. Process "Relevant" Nodes (Fully Contained OR Leaves)
-            if (fully_contained || node->is_leaf) {
-                double intersection_volume = 0.0;
+        if (start_cluster_id == -1) return false;
 
-                if (fully_contained) {
-                    intersection_volume = getBoxVolume(node->box);
-                } else {
-                    // Leaf with partial intersection
-                    intersection_volume = getApproxIntersectionVolume(node->box, ball);
-                }
-
-                // If the volume is non-negligible, process visibility
-                if (intersection_volume > 1e-9) {
-                    // ROS_INFO("   -> Processing %lu seers from this node (Vol: %.4f):", 
-                    //          node->visible_from_nodes.size(), intersection_volume);
-                    // Iterate over 'visible_from_nodes' (which stores pairs <VINode*, double>)
-                    // We extract the pointer 'u_ptr' and pair it with the computed volume.
-                    for (const auto& seer_pair : node->visible_from_nodes) {
-                        VINode* u = seer_pair.first;
-
-                        bool found = false;
-                        for (auto& existing_pair : out_seeing_nodes) {
-                            if (existing_pair.first == u) {
-                                existing_pair.second += intersection_volume;
-                                found = true;
-                                break;
-                            }
-                        }
-
-                        if (!found) {
-                            out_seeing_nodes.push_back({u, intersection_volume});
-                        // ROS_INFO("      + Added Seer ID: %d", u->id);
-                        }
-                    }
-                }
-
-                // If fully contained, children are also fully contained.
-                // We stop here to avoid double counting volume (assuming disjoint partition strategy)
-                // or simply because the prompt says "whenever we find a node... fully contained".
-                if (fully_contained) return;
-            }
-
-            // 3. Recurse (Internal nodes that are NOT fully contained)
-            if (!node->is_leaf) {
-                traverse(node->left.get());
-                traverse(node->right.get());
-            }
-        };
-
-        traverse(root_.get());
-    }
-
-
-
-    bool isConnectedToTarget(const Eigen::Vector3d& query_point, const Eigen::Vector3d& target_point) {
-        return true;
-    }
-
-
-private:
-    std::shared_ptr<VisibilityOracle> vis_oracle_;
-    std::shared_ptr<Sampler> sampler_;
-    std::mt19937 rng_;
-    BoundingBox workspace_bounds_; 
-    size_t num_nodes_ = 0;
-    std::unique_ptr<VINode> root_;
-    std::vector<VINode*> leaves_; 
-
-    // --- Bounding Box Helpers ---
-
-    Eigen::Vector3d getSize(const BoundingBox& b) {
-        return Eigen::Vector3d(
-            b.x_max - b.x_min,
-            b.y_max - b.y_min,
-            b.z_max - b.z_min
-        );
-    }
-
-
-    bool buildTreeRecursive(VINode* node, const BoundingBox& env_bounds, const std::string& idx, int& node_counter, int& leaf_counter) {
-        num_nodes_++;
+        // 2. Get neighbor clusters
+        const std::vector<std::pair<int, double>>& candidate_clusters = cluster_vis_graph_[start_cluster_id];
         
-        // Calculate size early for logging
-        Eigen::Vector3d box_size = getSize(node->box);
+        if (candidate_clusters.empty()) return false;
 
-        // ROS_INFO("[Node %s] Processing ID: %d | Bounds: [%.2f, %.2f, %.2f]", 
-        //         idx.c_str(), node_counter, box_size.x(), box_size.y(), box_size.z());
+        // 3. Sample Loop with rejection sampling
+        int chosen_cluster_id = -1;
+    
+        int max_attempts = 100;
+        std::uniform_int_distribution<> dist_idx(0, candidate_clusters.size() - 1);
+        std::uniform_real_distribution<double> sample_dist(-1.0, 1.0);
+        std::uniform_real_distribution<> reject_dist(0.0, 1.0);
 
-        // 1. Sample S_in (Valid points inside current box)
-        std::vector<Eigen::Vector3d> S_in;
-        sampler_->sampleInBox(node->box, params_.num_samples, S_in);
+        for (int i = 0; i < max_attempts; ++i) {
+            // Pick a cluster
+            int candidate_idx = dist_idx(rng_);
+            const auto& candidate_pair = candidate_clusters[candidate_idx];
+            int candidate_id = candidate_pair.first;
+            double weight = candidate_pair.second;
 
-        // 2. Sample S_out (Valid points in Env \ box)
-        std::vector<Eigen::Vector3d> S_out;
-        if (node_counter == 1) {
-            // Root node logic
-            sampler_->sampleInBox(node->box, params_.num_samples, S_out);
-        } else {
-            sampler_->sampleOutside(env_bounds, node->box, params_.num_samples, S_out);
+            if (reject_dist(rng_) < weight)
+                chosen_cluster_id = candidate_id;
+            else {
+                // ROS_WARN("Edge weight rejection");
+                continue;
+            }
+
+            const Cluster& chosen_cluster = clusters_[chosen_cluster_id];
+
+            // Sample from sphere
+            Eigen::Vector3d offset;
+            do {
+                offset = Eigen::Vector3d(sample_dist(rng_), sample_dist(rng_), sample_dist(rng_));
+            } while (offset.squaredNorm() > 1.0);
+
+            Eigen::Vector3d candidate = chosen_cluster.center + offset * chosen_cluster.radius;
+            
+            // Cluster Membership Check ---
+            int candidate_actual_cluster = query(candidate);
+            if (candidate_actual_cluster != chosen_cluster_id) {
+                // ROS_WARN("Different cluster!");
+                continue; 
+            }
+            
+            // ROS_WARN("before.");
+            // 4. Verify Visibility: Candidate must see Input Ball Center
+            if (vis_oracle_->checkBallBeamVisibility(candidate, ball) > visibility_threshold) {
+                sampled_point = candidate;
+                return true;
+            }
+            // ROS_WARN("after.");
+
         }
 
-        // DEBUG: Check sample sizes (casting size_t to unsigned long for %lu)
-        // ROS_INFO("Samples: S_in=%lu, S_out=%lu", S_in.size(), S_out.size());
+        return false;
+    }
 
-        if (S_in.empty() || S_out.empty()) {
-            // ROS_WARN("[Node %s] EMPTY SAMPLES! Forcing LEAF. (S_in=%lu, S_out=%lu)", 
-            //         idx.c_str(), S_in.size(), S_out.size());
+    
+
+    /**
+     * @brief Query function using K-Nearest Neighbors on workspace samples.
+     * Returns the Cluster ID (label) assigned to the query point.
+     * @return int Cluster ID or -1 if invalid.
+     */
+    int query(const Eigen::Vector3d& query_point) {
+        if (workspace_samples_.empty() || point_to_cluster_map_.empty()) return -1;
+
+        std::vector<double> q_vec = {query_point.x(), query_point.y(), query_point.z()};
+        
+        // Get K nearest points
+        std::vector<VertexDesc> neighbors = point_nn_.kNearest(q_vec, params_.k_neighbors);
+        if (neighbors.empty()) return -1;
+
+        // Vote for cluster
+        std::map<int, int> votes;
+        for (auto idx : neighbors) {
+            if (idx < point_to_cluster_map_.size()) {
+                int cid = point_to_cluster_map_[idx];
+                if (cid != -1) votes[cid]++;
+            }
+        }
+
+        if (votes.empty()) return -1;
+
+        // Find winner
+        int best_cid = -1;
+        int max_votes = -1;
+        for (const auto& pair : votes) {
+            if (pair.second > max_votes) {
+                max_votes = pair.second;
+                best_cid = pair.first;
+            }
+        }
+        return best_cid;
+    }
+
+    /**
+     * @brief Checks if the cluster containing 'query_point' has a direct edge 
+     * to the cluster containing 'target_point' in the Cluster Visibility Graph.
+     */
+    bool isConnectedToTarget(const Eigen::Vector3d& query_point, const Eigen::Vector3d& target_point) {
+        // 1. Identify Clusters
+        int query_cluster_id = query(query_point);
+        int target_cluster_id = query(target_point);
+
+        // Safety checks
+        if (query_cluster_id == -1 || target_cluster_id == -1) {
             return false;
         }
 
-        // 3. Compute Score (Intersection of visibility) - GPU OPTIMIZED
-        
-        // Combine sets to create a single context for the NxN matrix
-        std::vector<Eigen::Vector3d> combined = S_in;
-        combined.insert(combined.end(), S_out.begin(), S_out.end());
-
-        // A. Upload and compute NxN matrix on GPU
-        vis_oracle_->precomputeGpuMatrix(combined);
-
-        // B. Define "Guards" (S_in)
-        std::vector<int> guard_indices(S_in.size());
-        std::iota(guard_indices.begin(), guard_indices.end(), 0); 
-
-        // C. Run Reduction Kernel on GPU
-        std::vector<bool> seen_by_all = vis_oracle_->checkSeenByAllGPU(guard_indices);
-        std::vector<bool> seen_by_any = vis_oracle_->checkSeenByAnyGPU(guard_indices);
-
-        // D. Count
-        int numerator_count = 0;
-        int denominator_count = 0;
-        
-        // Iterate only over the S_out portion of the combined vector
-        for (size_t k = S_in.size(); k < combined.size(); ++k) {
-            if (seen_by_all[k]) numerator_count++;
-            if (seen_by_any[k]) denominator_count++;
+        // If they are in the same cluster, we assume they are connected/visible locally
+        if (query_cluster_id == target_cluster_id) {
+            return true;
         }
 
-        double score = (denominator_count > 0) 
-                    ? static_cast<double>(numerator_count) / static_cast<double>(denominator_count)
-                    : 0.0;
-
-
-        // E. Compute Convexity Score
-        // We reuse the 'seen_by_all' vector. Indices 0 to S_in.size()-1 correspond 
-        // to points in S_in checking visibility against all other S_in points.
-        int convex_count = 0;
-        size_t n_in = S_in.size();
-
-        for (size_t k = 0; k < n_in; ++k) {
-            if (seen_by_all[k]) {
-                convex_count++;
+        // 2. Check Adjacency in the Cluster Graph
+        // cluster_vis_graph_[i] contains pairs {neighbor_id, weight} representing edges i -> neighbor
+        const auto& neighbors = cluster_vis_graph_[target_cluster_id];
+        
+        for (const auto& edge : neighbors) {
+            if (edge.first == query_cluster_id) {
+                return true; 
             }
         }
 
-        double convexity_score = (n_in > 0) 
-                               ? static_cast<double>(convex_count) / static_cast<double>(n_in) 
-                               : 0.0;
+        return false;
+    }
 
-        node->convexity_score = convexity_score;
+private:
 
 
-        // DEBUG: Print Score Details
-        // ROS_INFO("Score Calc: %d/%d | Score=%.4f (Thresh: %.4f)", 
-        //         numerator_count, denominator_count, score, params_.vi_threshold);
+    std::shared_ptr<VisibilityOracle> vis_oracle_;
+    
+    // The sampled workspace points W
+    std::vector<Eigen::Vector3d> workspace_samples_;
+    
+    // Precomputed visibility: vis_cache_[i] = list of indices of OTHER workspace samples visible from workspace_samples_[i]
+    // Used for calculating VI during clustering
+    std::vector<std::vector<int>> vis_cache_;
 
-        // Termination Criteria
-        // Note: We used box_size calculated at the top
-        double min_dim = 0.1; 
-        bool too_small = (box_size.maxCoeff() < min_dim);
+    // The Clusters
+    std::vector<Cluster> clusters_;
 
-        // if (too_small) {
-        //     ROS_WARN("Box too small! MaxDim=%.4f < %.4f", 
-        //             box_size.maxCoeff(), min_dim);
-        // }
+    // Data Structures for Querying
+    NearestNeighbor point_nn_;   // Maps a query point to closest workspace samples (for k-NN)
+    
+    // Cluster Visibility Graph: Nodes are Cluster IDs. Edge exists if C_i sees C_j.
+    // Stored as adjacency list: cluster_vis_graph_[i] = { {j, weight}, {k, weight}, ... }
+    std::vector<std::vector<std::pair<int, double>>> cluster_vis_graph_;
 
-        if (score > params_.vi_threshold || too_small) {
-            // ROS_INFO("[Node %s] DECISION: LEAF (Final ID: %d)",idx.c_str(), node->id);
-            makeLeaf(node);
-            leaf_counter++;
+    // Map: Point Index -> Cluster ID
+    std::vector<int> point_to_cluster_map_;
+
+
+    BoundingBox workspace_bounds_; 
+
+    // int params_.num_samples = 1000;
+    // double params_.vi_threshold;
+    // double params_.limit_diameter_factor; 
+    // int params_.k_neighbors = 5; // Default k for query
+    // int params_.face_samples = -1;
+
+    std::shared_ptr<Sampler> sampler_; 
+    std::mt19937 rng_;
+
+
+/**
+     * @brief Computes visibility using the GPU Oracle if available.
+     * Replaces the CPU-based loop in build().
+     */
+    void computeSampleVisibility() {
+        // If Oracle is set to GPU mode, use the batch accelerator
+        if (vis_oracle_->getMethod() == VisibilityOracle::VisibilityMethod::GPUBF) {
+            computeSampleVisibilityGPU();
         } else {
-            // Split (Alg 2 Lines 12-16)
-            int d = 0; // 0=x, 1=y, 2=z
-            // Using box_size variable created at top
-            if (box_size.y() >= box_size.x() && box_size.y() >= box_size.z()) d = 1;
-            if (box_size.z() >= box_size.x() && box_size.z() >= box_size.y()) d = 2;
-
-            // std::string axis_name = (d==0 ? "X" : (d==1 ? "Y" : "Z"));
-            // ROS_INFO("[Node %s] DECISION: SPLIT on %s-axis", idx.c_str(), axis_name.c_str());
-
-            BoundingBox left_box = node->box;
-            BoundingBox right_box = node->box;
-
-            if (d == 0) {
-                double mid = (node->box.x_min + node->box.x_max) / 2.0;
-                left_box.x_max = mid;
-                right_box.x_min = mid;
-            } else if (d == 1) {
-                double mid = (node->box.y_min + node->box.y_max) / 2.0;
-                left_box.y_max = mid;
-                right_box.y_min = mid;
-            } else {
-                double mid = (node->box.z_min + node->box.z_max) / 2.0;
-                left_box.z_max = mid;
-                right_box.z_min = mid;
-            }
-
-            node->left = std::make_unique<VINode>();
-            node->left->box = left_box;
-            node->left->path_idx = idx + "0";
-            node->left->id = node_counter++;
-            node->left->parent = node;
-
-
-            node->right = std::make_unique<VINode>();
-            node->right->box = right_box;
-            node->right->path_idx = idx + "1";
-            node->right->id = node_counter++;
-            node->right->parent = node;
-
-            // Recursive calls
-            bool left_success = buildTreeRecursive(node->left.get(), env_bounds, idx + "0", node_counter, leaf_counter);
-            bool right_success = buildTreeRecursive(node->right.get(), env_bounds, idx + "1", node_counter, leaf_counter);
-
-            node->height = std::max(node->left->height, node->right->height) + 1;
-
-            if (!left_success)
-                node->left = nullptr;
-            if (!right_success)
-                node->right = nullptr;
-            if ((!left_success) && (!right_success)) {
-                makeLeaf(node);            
-                leaf_counter++;
-            }
-            
-            // ROS_INFO("[Node %s] Finished processing children. Height set to %d", idx.c_str(), node->height);
-        }
-        return true;
-    }
-
-    void makeLeaf(VINode* node) {
-        node->is_leaf = true;
-        node->height = 0;
-        leaves_.push_back(node);
-        std::ofstream leaf_file("leaf_boxes.txt", std::ios::app);
-        if (leaf_file.is_open()) {
-            // Format: ID min_x max_x min_y max_y min_z max_z
-            leaf_file << node->id << " "
-                      << node->box.x_min << " " << node->box.x_max << " "
-                      << node->box.y_min << " " << node->box.y_max << " "
-                      << node->box.z_min << " " << node->box.z_max << "\n";
-            leaf_file.close();
+            // Fallback to original CPU implementation
+            computeSampleVisibilityCPU();
         }
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/**
-     * @brief Computes all-pairs visibility between leaf centers.
-     * Updates 'visible_from_nodes' based on the sphere intersection constraints.
-     */
-    void ComputeLeafPairwiseVisibility() {
-        if (leaves_.empty()) return;
-
-        std::cout << "[VisibilityIntegrity] Computing Leaf Pairwise Visibility (" 
-                  << leaves_.size() << " leaves)..." << std::endl;
-
-        // 1. Prepare Data
-        std::vector<Eigen::Vector3d> leaf_centers;
-        leaf_centers.reserve(leaves_.size());
+    // Renamed your original function to this:
+    void computeSampleVisibilityCPU() {
+        vis_cache_.clear();
+        vis_cache_.resize(workspace_samples_.size());
         
-        for (VINode* leaf : leaves_) {
-            Eigen::Vector3d c(
-                (leaf->box.x_min + leaf->box.x_max) / 2.0,
-                (leaf->box.y_min + leaf->box.y_max) / 2.0,
-                (leaf->box.z_min + leaf->box.z_max) / 2.0
+        for (size_t i = 0; i < workspace_samples_.size(); ++i) {
+            vis_cache_[i].push_back(i); 
+            for (size_t j = i + 1; j < workspace_samples_.size(); ++j) {
+                if (vis_oracle_->checkVisibility(workspace_samples_[i], workspace_samples_[j])) {
+                    vis_cache_[i].push_back(j);
+                    vis_cache_[j].push_back(i);
+                }
+            }
+            std::sort(vis_cache_[i].begin(), vis_cache_[i].end());
+        }
+    }
+
+    // The new GPU logic
+    void computeSampleVisibilityGPU() {
+        std::cout << "[VisibilityIntegrity] GPU Acceleration: Computing " 
+                  << workspace_samples_.size() * workspace_samples_.size() 
+                  << " visibility pairs..." << std::endl;
+
+        vis_cache_.clear();
+        vis_cache_.resize(workspace_samples_.size());
+
+        // 1. Get flat matrix from Oracle
+        std::vector<bool> flat_results;
+        vis_oracle_->computeBatchVisibility(workspace_samples_, flat_results);
+
+        int N = workspace_samples_.size();
+
+        // 2. Parse flat matrix into Adjacency List (vis_cache_)
+        for (int i = 0; i < N; ++i) {
+            vis_cache_[i].push_back(i); // Always visible to self
+
+            for (int j = i + 1; j < N; ++j) {
+                // Index mapping: Row-major (i * N + j)
+                // Note: The kernel only computes for i < j. 
+                // We trust those results and mirror them.
+                if (flat_results[i * N + j]) {
+                    vis_cache_[i].push_back(j);
+                    vis_cache_[j].push_back(i);
+                }
+            }
+            // Ensure sorted order for set intersections later
+            std::sort(vis_cache_[i].begin(), vis_cache_[i].end());
+        }
+    }
+
+    // --- Step 2: Clustering Logic (Greedy) ---
+    void performClustering() {
+        clusters_.clear();
+        point_to_cluster_map_.assign(workspace_samples_.size(), -1);
+        
+        // List of remaining points (indices)
+        std::vector<int> remaining_points;
+        remaining_points.reserve(workspace_samples_.size());
+        for (size_t i = 0; i < workspace_samples_.size(); ++i) {
+            remaining_points.push_back(i);
+        }
+
+        while (!remaining_points.empty()) {
+            // 1. Pick random first point
+            std::uniform_int_distribution<> dist(0, remaining_points.size() - 1);
+            int rand_idx = dist(rng_);
+            int first_point_idx = remaining_points[rand_idx];
+
+            Cluster c;
+            c.id = clusters_.size();
+            c.member_indices.push_back(first_point_idx);
+            point_to_cluster_map_[first_point_idx] = c.id; // Map
+            
+            c.visible_samples_intersection = vis_cache_[first_point_idx];
+            c.visible_samples_union = vis_cache_[first_point_idx];
+
+            remaining_points[rand_idx] = remaining_points.back();
+            remaining_points.pop_back();
+
+            Eigen::Vector3d p_first = workspace_samples_[first_point_idx];
+            
+            std::sort(remaining_points.begin(), remaining_points.end(),
+                [&](int a, int b) {
+                    return (workspace_samples_[a] - p_first).squaredNorm() < (workspace_samples_[b] - p_first).squaredNorm();
+                }
             );
-            leaf_centers.push_back(c);
-        }
 
-        // 2. Run GPU Batch Visibility (All Pairs)
-        // results[i * N + j] is true if leaf[i] sees leaf[j]
-        std::vector<bool> visibility_matrix;
-        vis_oracle_->computeBatchVisibility(leaf_centers, visibility_matrix);
+            double max_dist_to_first = 0.0;
+            
+            for (size_t i = 0; i < remaining_points.size(); ) {
+                int curr_idx = remaining_points[i];
+                double dist = (workspace_samples_[curr_idx] - p_first).norm();
 
-        size_t N = leaves_.size();
+                if (c.member_indices.size() >= 5 && max_dist_to_first > 1e-6) {
+                    if (dist > params_.limit_diameter_factor * max_dist_to_first) {
+                        break; 
+                    }
+                }
 
-        // 3. Update Lists
-        for (size_t i = 0; i < N; ++i) {
-            for (size_t j = 0; j < N; ++j) {
-                if (i == j) continue; // Skip self
+                double score = calculateVI_Incremental(c, vis_cache_[curr_idx]);
 
-                // Check visibility (Symmetric in theory, but matrix might have 1-way if P1!=P2)
-                if (visibility_matrix[i * N + j]) {
-                    VINode* u = leaves_[i]; // The "Seer"? Or "Target"?
-                    VINode* v = leaves_[j];
+                if (score >= params_.vi_threshold) {
+                    c.member_indices.push_back(curr_idx);
+                    point_to_cluster_map_[curr_idx] = c.id; // Map
                     
-                    bool u_in_sphere = intersectsWorkspaceSphere(u->box);
-                    bool v_in_sphere = intersectsWorkspaceSphere(v->box);
-                    double score = 1.0; // Base score for raw visibility
-
-                    // Update u's list with v
-                    if (v_in_sphere) {
-                        u->visible_from_nodes.push_back({v, score});
+                    updateSets(c.visible_samples_intersection, c.visible_samples_union, vis_cache_[curr_idx]);
+                    
+                    if (dist > max_dist_to_first) {
+                        max_dist_to_first = dist;
                     }
 
-                }
-            }
-        }
-    }
-
-/**
-     * @brief Bottom-Up Recursive Traversal.
-     * Computes internal node visibility by intersecting children's lists.
-     * Propagates parent visibility back to the 'seers'.
-     * Handles single-child nodes by copying and propagating.
-     */
-    void ComputeParentVisibilityBottomUp(VINode* node) {
-        if (!node || node->is_leaf) return;
-
-        // 1. Recurse First (Post-Order)
-        if (node->left) ComputeParentVisibilityBottomUp(node->left.get());
-        if (node->right) ComputeParentVisibilityBottomUp(node->right.get());
-
-        // 2. Case A: Two Children - Intersect
-        if (node->left && node->right) {
-            
-            // Sort lists by Node ID to enable linear intersection
-            auto& list_l = node->left->visible_from_nodes;
-            auto& list_r = node->right->visible_from_nodes;
-
-            std::sort(list_l.begin(), list_l.end(), [](const auto& a, const auto& b){
-                return a.first->id < b.first->id;
-            });
-            std::sort(list_r.begin(), list_r.end(), [](const auto& a, const auto& b){
-                return a.first->id < b.first->id;
-            });
-
-            // Perform Intersection
-            auto it_l = list_l.begin();
-            auto it_r = list_r.begin();
-
-            while (it_l != list_l.end() && it_r != list_r.end()) {
-                if (it_l->first->id < it_r->first->id) {
-                    ++it_l;
-                } else if (it_r->first->id < it_l->first->id) {
-                    ++it_r;
+                    remaining_points.erase(remaining_points.begin() + i);
                 } else {
-                    // Match Found! Same Node 'S' sees both Left and Right
-                    VINode* seer = it_l->first;
-                    double avg_score = (it_l->second + it_r->second) / 2.0;
-
-                    if(intersectsWorkspaceSphere(seer->box)) 
-                       node->visible_from_nodes.push_back({seer, avg_score});
-                    
-                    if(intersectsWorkspaceSphere(node->box))
-                        seer->visible_from_nodes.push_back({node, avg_score});
-
-                    ++it_l;
-                    ++it_r;
+                    ++i;
                 }
             }
+
+            // Compute Stats
+            Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+            for (int idx : c.member_indices) {
+                sum += workspace_samples_[idx];
+            }
+            c.center = sum / c.member_indices.size();
+            c.size_ = c.member_indices.size(); // Set size
+
+            double max_r_sq = 0.0;
+            for (int idx : c.member_indices) {
+                double r_sq = (workspace_samples_[idx] - c.center).squaredNorm();
+                if (r_sq > max_r_sq) max_r_sq = r_sq;
+            }
+            c.radius = std::sqrt(max_r_sq);
+
+            clusters_.push_back(c);
         }
-        // 3. Case B: Single Child (Left or Right)
-        else if (node->left || node->right) {
-            VINode* child = node->left ? node->left.get() : node->right.get();
+
+
+        // ---------------------------------------------------------
+        // STATS OUTPUT
+        // ---------------------------------------------------------
+        auto computeAndPrintStats = [](const std::string& name, std::vector<double>& data) {
+            if (data.empty()) {
+                ROS_INFO("  %s: None", name.c_str());
+                return;
+            }
+            double sum = 0.0;
+            double min_val = data[0];
+            double max_val = data[0];
             
-            // Copy the child's list to the parent
-            node->visible_from_nodes = child->visible_from_nodes;
-
-            // Update the nodes in that list by inserting the parent
-            for (auto& pair : node->visible_from_nodes) {
-                VINode* seer = pair.first;
-                double score = pair.second;
-                
-                // Add parent to the seer's list
-                seer->visible_from_nodes.push_back({node, score});
+            for(double v : data) {
+                sum += v;
+                if(v < min_val) min_val = v;
+                if(v > max_val) max_val = v;
             }
-        }
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    /**
-     * @brief Recursively checks convexity and marks visibility computed.
-     * Call with root_.get() to start the traversal.
-     */
-    void ComputeTreeVisibility(VINode* node) {
-        if (!node) return;
-
-        // 1. Process current node if it meets convexity criteria
-        if (node->convexity_score > 0.99) {
-            ComputeVisibilityInSiblings(node);
-            node->visibility_computed = true;
-        }
-
-        // 2. Recursively traverse children
-        if (node->left) {
-            ComputeTreeVisibility(node->left.get());
-        }
-        if (node->right) {
-            ComputeTreeVisibility(node->right.get());
-        }
-    }
-
-    /**
-     * @brief Traverses the subtree rooted at 'root' to find nodes visible from 'v'.
-     * Uses BFS traversal and prunes branches based on visibility score.
-     */
-    void ComputeNodeVisibilityInSubtree(VINode* v, VINode* root) {
-        if (!v || !root) return;
-
-        std::queue<VINode*> q;
-        q.push(root);
-
-        int n_samples = params_.num_samples;
-
-        while (!q.empty()) {
-            VINode* u = q.front();
-            q.pop();
-
-            // 1. Initial Checks: Convexity and Sphere Intersection
-            bool u_in_sphere = intersectsWorkspaceSphere(u->box);
-            bool v_in_sphere = intersectsWorkspaceSphere(v->box);
             
-            // Proceed only if u is convex enough AND at least one node is in the sphere
-            if (u->convexity_score > 0.99 && (u_in_sphere || v_in_sphere)) {
-                
-                // 2. Sample Points
-                std::vector<Eigen::Vector3d> S_u, S_v;
-                sampler_->sampleInBox(u->box, n_samples, S_u);
-                sampler_->sampleInBox(v->box, n_samples, S_v);
+            double avg = sum / data.size();
+            
+            // Standard Deviation
+            double sq_sum = 0.0;
+            for(double v : data) sq_sum += (v - avg) * (v - avg);
+            double std = std::sqrt(sq_sum / data.size());
+            
+            // Median
+            std::sort(data.begin(), data.end());
+            double median = (data.size() % 2 == 0) 
+                            ? (data[data.size()/2 - 1] + data[data.size()/2]) / 2.0 
+                            : data[data.size()/2];
 
-                if (S_u.empty() || S_v.empty()) continue;
-
-                // 3. Compute Bi-Directional "Seen By All" Score using GPU
-                
-                // Combine samples: [S_u ... S_v]
-                std::vector<Eigen::Vector3d> combined = S_u;
-                combined.insert(combined.end(), S_v.begin(), S_v.end());
-
-                // Upload Matrix
-                vis_oracle_->precomputeGpuMatrix(combined);
-
-                // A. Count points in u that see all points in v
-                // Guards = S_v (indices from S_u.size() to end)
-                std::vector<int> guards_v(S_v.size());
-                std::iota(guards_v.begin(), guards_v.end(), (int)S_u.size());
-                
-                std::vector<bool> u_sees_all_v = vis_oracle_->checkSeenByAllGPU(guards_v);
-                
-                int count_u_seeing_all_v = 0;
-                for (size_t i = 0; i < S_u.size(); ++i) {
-                    if (u_sees_all_v[i]) count_u_seeing_all_v++;
-                }
-
-                // B. Count points in v that see all points in u
-                // Guards = S_u (indices from 0 to S_u.size()-1)
-                std::vector<int> guards_u(S_u.size());
-                std::iota(guards_u.begin(), guards_u.end(), 0);
-
-                std::vector<bool> v_sees_all_u = vis_oracle_->checkSeenByAllGPU(guards_u);
-
-                int count_v_seeing_all_u = 0;
-                for (size_t i = S_u.size(); i < combined.size(); ++i) {
-                    if (v_sees_all_u[i]) count_v_seeing_all_u++;
-                }
-
-                // 4. Calculate Score (Min of the two ratios)
-                double ratio_u = static_cast<double>(count_u_seeing_all_v) / S_u.size();
-                double ratio_v = static_cast<double>(count_v_seeing_all_u) / S_v.size();
-                double score = std::min(ratio_u, ratio_v);
-
-                // 5. Update and Recurse
-                if (score > 0.99) {
-                    
-                    // Update u's list if v is relevant (intersects sphere)
-                    if (v_in_sphere) {
-                        u->visible_from_nodes.push_back({v, score});
-                    }
-
-                    // Update v's list if u is relevant (intersects sphere)
-                    if (u_in_sphere) {
-                        v->visible_from_nodes.push_back({u, score});
-                    }
-
-
-                }
-                else {
-                    // "Recursively" call on children (BFS Enqueue)
-                    if (u->left) q.push(u->left.get());
-                    if (u->right) q.push(u->right.get());
-                }  
-            }
-        }
-    }
-
-
-    /**
-     * @brief Traverses ancestors of v. For each ancestor u, computes visibility between v
-     * and u's "other" child (the sibling of the path to v).
-     */
-    void ComputeVisibilityInSiblings(VINode* v) {
-        if (!v) return;
-
-        ROS_WARN("[ComputeTreeVisibility] computing visibility of node with id %d", v->id);
-
-        // 'ancestor_child' tracks the node on the path to v that is a child of u
-        VINode* ancestor_child = v;
-        VINode* u = v->parent;
-
-        while (u != nullptr) {
-            // Determine the sibling: The child of u that is NOT ancestor_child
-            VINode* sibling = nullptr;
-            if (u->left.get() == ancestor_child) {
-                sibling = u->right.get();
-            } else {
-                sibling = u->left.get();
-            }
-
-            // Process only if sibling exists and its visibility hasn't been finalized
-            if (sibling && !sibling->visibility_computed) {
-                ComputeNodeVisibilityInSubtree(v, sibling);
-            }
-
-            // Traverse up towards the root
-            ancestor_child = u;
-            u = u->parent;
-        }
-    }
-
-
-
-
-    bool intersectsWorkspaceSphere(BoundingBox& b){
-        double cx = 0.33, cy = 0.0, cz = 0.33;
-        // double cx = 0.0, cy = 0.0, cz = 0.0;
-        double r_sq = 1.2 * 1.2;
-        double dist_sq = 0.0;
-
-        // Calculate squared distance from Center to the Box
-        if (cx < b.x_min) dist_sq += (cx - b.x_min) * (cx - b.x_min);
-        else if (cx > b.x_max) dist_sq += (cx - b.x_max) * (cx - b.x_max);
-
-        if (cy < b.y_min) dist_sq += (cy - b.y_min) * (cy - b.y_min);
-        else if (cy > b.y_max) dist_sq += (cy - b.y_max) * (cy - b.y_max);
-
-        if (cz < b.z_min) dist_sq += (cz - b.z_min) * (cz - b.z_min);
-        else if (cz > b.z_max) dist_sq += (cz - b.z_max) * (cz - b.z_max);
-
-        return dist_sq <= r_sq;
-    };
-
-
-    // --- Geometric Helpers for Ball Query ---
-
-    // Squared distance from a point to the closest point on a box
-    double distSqPointBox(const Eigen::Vector3d& p, const BoundingBox& b) {
-        double dist_sq = 0.0;
-        if (p.x() < b.x_min) dist_sq += (p.x() - b.x_min) * (p.x() - b.x_min);
-        else if (p.x() > b.x_max) dist_sq += (p.x() - b.x_max) * (p.x() - b.x_max);
-
-        if (p.y() < b.y_min) dist_sq += (p.y() - b.y_min) * (p.y() - b.y_min);
-        else if (p.y() > b.y_max) dist_sq += (p.y() - b.y_max) * (p.y() - b.y_max);
-
-        if (p.z() < b.z_min) dist_sq += (p.z() - b.z_min) * (p.z() - b.z_min);
-        else if (p.z() > b.z_max) dist_sq += (p.z() - b.z_max) * (p.z() - b.z_max);
-        
-        return dist_sq;
-    }
-
-    // Checks if the Box is FULLY contained within the Ball
-    bool isBoxFullyInBall(const BoundingBox& b, const Ball& ball) {
-        double r_sq = ball.radius * ball.radius;
-        // Check all 8 corners. If any corner is outside, the box is not fully contained.
-        // (Optimization: We could check only the furthest corner, but checking 8 is robust/simpler).
-        double corners[8][3] = {
-            {b.x_min, b.y_min, b.z_min}, {b.x_min, b.y_min, b.z_max},
-            {b.x_min, b.y_max, b.z_min}, {b.x_min, b.y_max, b.z_max},
-            {b.x_max, b.y_min, b.z_min}, {b.x_max, b.y_min, b.z_max},
-            {b.x_max, b.y_max, b.z_min}, {b.x_max, b.y_max, b.z_max}
+            ROS_INFO("  %s -> Avg: %.3f | Med: %.3f | Min: %.3f | Max: %.3f | Std: %.3f", 
+                name.c_str(), avg, median, min_val, max_val, std);
         };
 
-        for (int i = 0; i < 8; ++i) {
-            double dx = corners[i][0] - ball.center.x();
-            double dy = corners[i][1] - ball.center.y();
-            double dz = corners[i][2] - ball.center.z();
-            if (dx*dx + dy*dy + dz*dz > r_sq) return false;
-        }
-        return true;
-    }
-
-
-    // --- Volume Helpers ---
-
-    double getBoxVolume(const BoundingBox& b) {
-        return (b.x_max - b.x_min) * (b.y_max - b.y_min) * (b.z_max - b.z_min);
-    }
-
-    double getApproxIntersectionVolume(const BoundingBox& b, const Ball& ball) {
-        double box_vol = getBoxVolume(b);
-
-        double r_sq = ball.radius * ball.radius;
-
-        double sphere_vol = r_sq * M_PI;
-        if (box_vol <= 1e-9) return 0.0;
-
-        int samples = 1000;
-        int inside_count = 0;
+        std::vector<double> all_rads, all_sizes;
+        std::vector<double> small_rads, small_sizes;
         
-        // Use local distributions to sample inside this specific box
-        std::uniform_real_distribution<double> x_d(b.x_min, b.x_max);
-        std::uniform_real_distribution<double> y_d(b.y_min, b.y_max);
-        std::uniform_real_distribution<double> z_d(b.z_min, b.z_max);
-
-
-        for(int i=0; i<samples; ++i) {
-            double px = x_d(rng_);
-            double py = y_d(rng_);
-            double pz = z_d(rng_);
-
-            double dx = px - ball.center.x();
-            double dy = py - ball.center.y();
-            double dz = pz - ball.center.z();
-
-            if (dx*dx + dy*dy + dz*dz <= r_sq) {
-                inside_count++;
+        for(const auto& c : clusters_) {
+            all_rads.push_back(c.radius);
+            all_sizes.push_back(static_cast<double>(c.size_));
+            
+            if(c.size_ < 10) {
+                small_rads.push_back(c.radius);
+                small_sizes.push_back(static_cast<double>(c.size_));
             }
         }
 
-        return box_vol * (static_cast<double>(inside_count) / samples) / sphere_vol;
+        ROS_INFO("[VisibilityIntegrity] Clustering Complete. Total Clusters: %lu", clusters_.size());
+        computeAndPrintStats("All - Radius", all_rads);
+        computeAndPrintStats("All - Size  ", all_sizes);
+        
+        ROS_INFO("[VisibilityIntegrity] Small Clusters (<10 pts): %lu", small_sizes.size());
+        if (!small_sizes.empty()) {
+            computeAndPrintStats("Small - Radius", small_rads);
+            computeAndPrintStats("Small - Size  ", small_sizes);
+        }
+        // ---------------------------------------------------------
+
+
+        std::ofstream outfile("clustered_points.txt");
+        if (outfile.is_open()) {
+            for (const auto& cluster : clusters_) {
+                for (int idx : cluster.member_indices) {
+                    const Eigen::Vector3d& pt = workspace_samples_[idx];
+                    // Format: x y z cluster_id
+                    outfile << pt.x() << " " << pt.y() << " " << pt.z() << " " << cluster.id << "\n";
+                }
+            }
+            outfile.close();
+            std::cout << "[VisibilityIntegrity] Saved clustered points to clustered_points.txt" << std::endl;
+        } else {
+            std::cerr << "[VisibilityIntegrity] Error: Could not open clustered_points.txt for writing." << std::endl;
+        }
     }
 
-    // Helper map for ID lookup
-    std::unordered_map<int, VINode*> all_nodes_map_;
 
+
+
+    // --- Step 3: Cluster Visibility Graph Building (Cached Version) ---
+    void buildClusterVisibilityGraph() {
+        cluster_vis_graph_.clear();
+        cluster_vis_graph_.resize(clusters_.size());
+
+        // 1. Define Goal Region
+        Eigen::Vector3d goal_center(0.33, 0.0, 0.33);
+        double goal_radius = 1.2;
+
+        // 2. Precompute which clusters intersect the goal
+        std::vector<bool> cluster_intersects_goal(clusters_.size(), false);
+        for (size_t i = 0; i < clusters_.size(); ++i) {
+            double dist = (clusters_[i].center - goal_center).norm();
+            if (dist < (clusters_[i].radius + goal_radius)) {
+                cluster_intersects_goal[i] = true;
+            }
+        }
+
+        int checks_per_pair = 100; 
+
+        for (size_t i = 0; i < clusters_.size(); ++i) {
+            for (size_t j = i + 1; j < clusters_.size(); ++j) {
+                
+                // Optimization: Skip if neither cluster targets the goal
+                if (!cluster_intersects_goal[i] && !cluster_intersects_goal[j]) {
+                    continue;
+                }
+
+                int visible_count = 0;
+                
+                // Random sampling check using CACHED results
+                for (int k = 0; k < checks_per_pair; ++k) {
+                    // Pick random point indices
+                    int idx_i = clusters_[i].member_indices[std::uniform_int_distribution<>(0, clusters_[i].size_ - 1)(rng_)];
+                    int idx_j = clusters_[j].member_indices[std::uniform_int_distribution<>(0, clusters_[j].size_ - 1)(rng_)];
+                    
+                    // CHECK VISIBILITY VIA CACHE (Binary Search)
+                    if (std::binary_search(vis_cache_[idx_i].begin(), vis_cache_[idx_i].end(), idx_j)) {
+                        visible_count++;
+                    }
+                }
+
+                if (visible_count > 0) {
+                    double weight = static_cast<double>(visible_count) / checks_per_pair;
+
+                    // Add edge i -> j (Only if j intersects goal)
+                    if (cluster_intersects_goal[j]) {
+                        cluster_vis_graph_[i].push_back({static_cast<int>(j), weight});
+                    }
+
+                    // Add edge j -> i (Only if i intersects goal)
+                    if (cluster_intersects_goal[i]) {
+                        cluster_vis_graph_[j].push_back({static_cast<int>(i), weight});
+                    }
+                }
+            }
+        }
+
+        // --- NEW: Count and Output Edges ---
+        int total_edges = 0;
+        for (const auto& adj_list : cluster_vis_graph_) {
+            total_edges += adj_list.size();
+        }
+        ROS_WARN("[VisibilityIntegrity] Graph built. Total edges: %d",total_edges);
+    }
+
+
+
+    // --- Helpers ---
+
+    double calculateVI_Incremental(const Cluster& c, const std::vector<int>& candidate_vis) {
+        std::vector<int> temp_inter;
+        std::set_intersection(c.visible_samples_intersection.begin(), c.visible_samples_intersection.end(),
+                              candidate_vis.begin(), candidate_vis.end(),
+                              std::back_inserter(temp_inter));
+
+        if (temp_inter.empty()) return 0.0; 
+
+        std::vector<int> temp_union;
+        std::set_union(c.visible_samples_union.begin(), c.visible_samples_union.end(),
+                       candidate_vis.begin(), candidate_vis.end(),
+                       std::back_inserter(temp_union));
+
+        return static_cast<double>(temp_inter.size()) / static_cast<double>(temp_union.size());
+    }
+
+    void updateSets(std::vector<int>& intersect_set, std::vector<int>& union_set, const std::vector<int>& new_set) {
+        std::vector<int> next_inter;
+        std::set_intersection(intersect_set.begin(), intersect_set.end(),
+                              new_set.begin(), new_set.end(),
+                              std::back_inserter(next_inter));
+        intersect_set = next_inter;
+
+        std::vector<int> next_union;
+        std::set_union(union_set.begin(), union_set.end(),
+                       new_set.begin(), new_set.end(),
+                       std::back_inserter(next_union));
+        union_set = next_union;
+    }
 };
 
 } // namespace visual_planner

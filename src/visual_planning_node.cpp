@@ -18,8 +18,8 @@ private:
 
     // State tracking to detect changes
     bool params_changed_;
-    bool current_use_vis_ik_;
-    bool current_use_vi_;
+    bool use_visual_ik_;
+    bool use_visibility_integrity_;
     bool current_shortcutting_;
     std::string current_mode_;
 
@@ -33,14 +33,15 @@ public:
 
         planner_ = std::make_shared<visual_planner::VisualPlanner>(scene_ptr);
 
+        // Initialize current state trackers with defaults (or what was just loaded)
+        // We assume defaults match the VisualPlanner constructor defaults
+        use_visual_ik_ = false;
+        use_visibility_integrity_ = false;
+        current_shortcutting_ = true;
+
         // Load static config (Bounds, Resolution, etc.)
         loadStaticConfig();
         
-        // Initialize current state trackers with defaults (or what was just loaded)
-        // We assume defaults match the VisualPlanner constructor defaults
-        current_use_vis_ik_ = false;
-        current_use_vi_ = false;
-        current_shortcutting_ = true;
 
         service_ = nh_.advertiseService("plan_visibility_path", &VisualPlanningNode::planCallback, this);
         ROS_WARN("Visual Planning Service Ready");
@@ -67,8 +68,8 @@ public:
         planner_->setVisibilityThreshold(visibility_threshold);
 
         bool use_visual_ik;
-        pnh_.param("planner/use_visual_ik", use_visual_ik, true);
-        planner_->setUseVisualIK(use_visual_ik);
+        pnh_.param("planner/use_visual_ik", use_visual_ik_, true);
+        planner_->setUseVisualIK(use_visual_ik_);
 
         std::string group_name;
         pnh_.param<std::string>("planner/group_name", group_name, "manipulator");
@@ -109,8 +110,8 @@ public:
         planner_->setTimeCap(time_cap);
 
         bool use_visibility_integrity;
-        pnh_.param("planner/use_visibility_integrity", use_visibility_integrity, true);
-        planner_->setUseVisibilityIntegrity(use_visibility_integrity);
+        pnh_.param("planner/use_visibility_integrity", use_visibility_integrity_, true);
+        planner_->setUseVisibilityIntegrity(use_visibility_integrity_);
 
         visual_planner::VisibilityIntegrityParams vi_params; // Initialized with defaults from Types.h
         pnh_.param("planner/visibility_integrity_params/num_samples", vi_params.num_samples, vi_params.num_samples);
@@ -132,9 +133,9 @@ public:
             new_vis_ik = false;
         }
 
-        if (new_vis_ik != current_use_vis_ik_) {
+        if (new_vis_ik != use_visual_ik_) {
             planner_->setUseVisualIK(new_vis_ik);
-            current_use_vis_ik_ = new_vis_ik;
+            use_visual_ik_ = new_vis_ik;
             changed_this_cycle = true;
             ROS_INFO("Param Changed: use_visual_ik -> %s", new_vis_ik ? "TRUE" : "FALSE");
         }
@@ -147,9 +148,9 @@ public:
             // Found nested param
         }
 
-        if (new_vi != current_use_vi_) {
+        if (new_vi != use_visibility_integrity_) {
             planner_->setUseVisibilityIntegrity(new_vi);
-            current_use_vi_ = new_vi;
+            use_visibility_integrity_ = new_vi;
             changed_this_cycle = true;
             ROS_INFO("Param Changed: use_visibility_integrity -> %s", new_vi ? "TRUE" : "FALSE");
         }
