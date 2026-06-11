@@ -85,7 +85,8 @@ int main(int argc, char** argv)
   //----------------------------------------------------------------------
   // 3. Move the robot to the returned pose
   //----------------------------------------------------------------------
-  static const std::string PLANNING_GROUP = "manipulator";
+  // static const std::string PLANNING_GROUP = "manipulator";
+  static const std::string PLANNING_GROUP = "whole_robot";
   moveit::planning_interface::MoveGroupInterface move_group(PLANNING_GROUP);
 
   move_group.setPoseTarget(best_pose);

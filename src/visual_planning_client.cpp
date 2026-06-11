@@ -97,7 +97,8 @@ int main(int argc, char** argv)
   }
 
   // Instantiate Executer (assumes "manipulator" group, change if needed)
-  PathExecuter executer("manipulator");
+//   PathExecuter executer("manipulator");
+  PathExecuter executer("whole_robot");
   
   double velocity_scaling = 0.1;
   double accelaration_scaling = 0.1;

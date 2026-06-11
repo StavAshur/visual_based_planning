@@ -17,7 +17,8 @@ class VisualIKServer
 {
 public:
   VisualIKServer()
-    : move_group("manipulator")
+    // : move_group("manipulator")
+    : move_group("whole_robot")
   {
     // Node handles
     ros::NodeHandle nh;

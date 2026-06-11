@@ -31,7 +31,8 @@ private:
 
     double resolution_; // Resolution in radians
 
-    std::string group_name_= "manipulator";
+    // std::string group_name_= "manipulator";
+    std::string group_name_= "whole_robot";
 
 
 public:
@@ -72,11 +73,15 @@ public:
         }
 
         moveit::core::RobotState& state = planning_scene_->getCurrentStateNonConst();
-        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup("manipulator");
+
+        // const moveit::core::JointModelGroup* jmg = state.getJointModelGroup("manipulator");
+        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup("whole_robot");
         if (!jmg) return false;
-        
+
         state.setJointGroupPositions(jmg, joint_values);
-        state.update(); 
+
+        state.update();
+
         
         // --- UPDATED COLLISION REQUEST ---
         collision_detection::CollisionRequest req;

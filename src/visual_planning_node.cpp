@@ -72,7 +72,8 @@ public:
         planner_->setUseVisualIK(use_visual_ik_);
 
         std::string group_name;
-        pnh_.param<std::string>("planner/group_name", group_name, "manipulator");
+        // pnh_.param<std::string>("planner/group_name", group_name, "manipulator");
+        pnh_.param<std::string>("planner/group_name", group_name, "whole_robot");
         planner_->setGroupName(group_name);
 
         std::string ee_link;
@@ -168,13 +169,13 @@ public:
 
         // 4. Mode (Global)
         std::string new_mode;
-        if (pnh_.getParam("planner/mode", new_mode)) {
-            if (new_mode != current_mode_) {
-                current_mode_ = new_mode;
-                changed_this_cycle = true;
-                ROS_INFO("Param Changed: planner/mode -> %s", current_mode_.c_str());
-            }
+        nh_.getParam("planner/mode", new_mode);
+        if (new_mode != current_mode_) {
+            current_mode_ = new_mode;
+            changed_this_cycle = true;
+            ROS_INFO("Param Changed: planner/mode -> %s", current_mode_.c_str());
         }
+    
 
         // Update the member flag if any change occurred
         if (changed_this_cycle) {
@@ -232,17 +233,17 @@ public:
 
         bool success = false;
         if (mode.find("PRM") != std::string::npos) {
-            // visual_planner::Sampler& sampler = planner_->getSampler();
-            // visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
-            // std::vector<double> start;
-            // bool found_random_start = false;
+            visual_planner::Sampler& sampler = planner_->getSampler();
+            visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
+            std::vector<double> start;
+            bool found_random_start = false;
 
-            // while (!found_random_start) {
-            //     start = sampler.sampleUniform();
-            //     found_random_start = validity_checker.isValid(start);
-            // } 
+            while (!found_random_start) {
+                start = sampler.sampleUniform();
+                found_random_start = validity_checker.isValid(start);
+            } 
 
-            // success = planner_->planVisPRM(start);
+            success = planner_->planVisPRM(start);
             success = planner_->planVisPRM();
         } else {
             success = planner_->planVisRRT();

@@ -89,7 +89,8 @@ public:
         : planning_scene_(scene),
           resolution_(resolution), 
           visibility_threshold_(0.8),
-          group_name_("manipulator"), 
+        //   group_name_("manipulator"),
+          group_name_("whole_robot"), 
           ee_link_name_("tool0"),
           rng_(std::random_device{}()),
           shortcutting_(true),
@@ -134,7 +135,7 @@ public:
         const moveit::core::RobotState& current_state = scene->getCurrentState();
         current_state.copyJointGroupPositions(group_name_, start_joint_values_);
 
-        workspace_bounds_ = {-2.0, 2.0, -2.0, 2.0, -0.5, 3.5};
+        workspace_bounds_ = {-3.0, 3.0, -3.0, 3.0, -0.25, 2.5};
         sampler_->setWorkspaceBounds(workspace_bounds_);
         validity_checker_->setWorkspaceBounds(workspace_bounds_);
 
@@ -388,7 +389,7 @@ public:
     {
         // 0. Initialize
         reset();
-        
+
         // Use member variable start_joint_values_
         if (start_joint_values_.empty()) {
             ROS_ERROR("Start joint values not set!");
@@ -399,7 +400,7 @@ public:
             ROS_ERROR("Start state is invalid!");
             return false;
         }
-
+        
         VertexDesc root_id = addState(start_joint_values_);
 
         // Calculate initial sampling radius

@@ -1,11 +1,12 @@
 planner:
   mode: "VisRRT" # "VisRRT" or "VisPRM"
   use_visual_ik: true
-  use_visibility_integrity: true
+  use_visibility_integrity: false
   time_cap: 120 #seconds
 
   # Planning Group & Links
-  group_name: "manipulator"
+  # group_name: "manipulator"
+  group_name: "whole_robot"
   # ee_link_name: "ur_arm_tool0"
   # ee_link_name: "tool0"
   # ee_link_name: "flashlight"
@@ -15,10 +16,10 @@ planner:
   resolution: 0.01
   visibility_threshold: 0.7
   workspace_bounds:
-    x_min: -2.0
-    x_max: 2.0
-    y_min: -2.0
-    y_max: 2.0
+    x_min: -3.0
+    x_max: 3.0
+    y_min: -3.0
+    y_max: 3.0
     z_min: -0.25
     z_max: 2.5
 

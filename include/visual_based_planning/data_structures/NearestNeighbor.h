@@ -120,7 +120,8 @@ class NearestNeighbor {
     std::string group_name_;
 
 public:
-    NearestNeighbor() : index_(nullptr), dim_(0), group_name_("manipulator") {}
+    // NearestNeighbor() : index_(nullptr), dim_(0), group_name_("manipulator") {}
+    NearestNeighbor() : index_(nullptr), dim_(0), group_name_("whole_robot") {}
 
     ~NearestNeighbor() {
         if (index_) delete index_;
