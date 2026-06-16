@@ -47,56 +47,114 @@ struct RobotStateDistance {
     const DataSource &data_source;
     planning_scene::PlanningScenePtr planning_scene;
     std::string group_name;
+    
+    std::vector<const moveit::core::JointModel*> active_joints_;
+    double revolute_weight_;
 
     RobotStateDistance(const DataSource &_data_source, 
                        planning_scene::PlanningScenePtr _scene, 
                        const std::string& _group) 
-        : data_source(_data_source), planning_scene(_scene), group_name(_group) {}
+        : data_source(_data_source), planning_scene(_scene), group_name(_group), revolute_weight_(1.0) {
+            if (planning_scene) {
+                const moveit::core::RobotState& state = planning_scene->getCurrentState();
+                const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name);
+                if (jmg) {
+                    active_joints_ = jmg->getActiveJointModels();
+                    revolute_weight_ = static_cast<double>(active_joints_.size());
+                }
+            }        
+        }
 
-    // Calculate distance using JointModel logic
+    // // Calculate distance using JointModel logic
+    // inline DistanceType evalMetric(const ElementType *a, const size_t b_idx, size_t size) const {
+    //     if (!planning_scene) return 0.0;
+
+    //     const moveit::core::RobotState& state = planning_scene->getCurrentState();
+    //     const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name);
+    //     if (!jmg) return 0.0;
+
+    //     const auto& active_joints = jmg->getActiveJointModels();
+    //     double dist_sq = 0.0;
+
+    //     // Get pointer to point b's data
+    //     const ElementType* b = data_source.points[b_idx].config.data();
+
+    //     // Iterate over joints
+    //     for (size_t i = 0; i < size && i < active_joints.size(); ++i) {
+    //         const moveit::core::JointModel* joint = active_joints[i];
+            
+    //         // distance() calculates the correct difference based on joint type (revolute, cyclic, etc.)
+    //         // Note: This assumes 1 variable per joint in the vector, which is standard for simple arms.
+    //         double d = joint->distance(a + i, b + i);
+
+    //         if ((i==0) || (i==1))
+    //             dist_sq += active_joints.size() * d * d;
+    //         else
+    //             dist_sq += d * d;
+    //     }       
+    //     return std::sqrt(dist_sq);
+    // }
+    
+    // // Required by nanoflann interface for optimizations
+    // // Since our distance is complex (state dependent), accumulation is just the full distance logic per dimension?
+    // // Nanoflann uses this for early exit. For complex joints, simpler Euclidean might be a safe lower bound, 
+    // // but to be correct we should use the joint distance. 
+    // inline DistanceType accum_dist(const ElementType a, const ElementType b, int i) const {
+    //     // Warning: This simplistic accum_dist might not work perfectly if access to JointModel requires the index 'i'.
+    //     // To properly implement this, we'd need access to the specific JointModel for dimension 'i'.
+    //     // For safety/correctness with minimal changes, we can perform the specific joint calc.
+        
+    //     if (!planning_scene) return (a - b) * (a - b);
+    //     const moveit::core::RobotState& state = planning_scene->getCurrentState();
+    //     const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name);
+    //     if (!jmg) return (a - b) * (a - b);
+    //     const auto& active_joints = jmg->getActiveJointModels();
+        
+    //     if (i < active_joints.size()) {
+    //         double d = active_joints[i]->distance(&a, &b);
+    //         if ((i==0) || (i==1))
+    //             return active_joints.size() * d * d;
+    //         else
+    //             return d * d;
+    //     }
+    //     return (a - b) * (a - b);
+    // }
+
     inline DistanceType evalMetric(const ElementType *a, const size_t b_idx, size_t size) const {
-        if (!planning_scene) return 0.0;
+        if (active_joints_.empty()) return 0.0;
 
-        const moveit::core::RobotState& state = planning_scene->getCurrentState();
-        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name);
-        if (!jmg) return 0.0;
-
-        const auto& active_joints = jmg->getActiveJointModels();
         double dist_sq = 0.0;
-
-        // Get pointer to point b's data
         const ElementType* b = data_source.points[b_idx].config.data();
 
-        // Iterate over joints
-        for (size_t i = 0; i < size && i < active_joints.size(); ++i) {
-            const moveit::core::JointModel* joint = active_joints[i];
+        for (size_t i = 0; i < size && i < active_joints_.size(); ++i) {
+            const moveit::core::JointModel* joint = active_joints_[i];
             
-            // distance() calculates the correct difference based on joint type (revolute, cyclic, etc.)
-            // Note: This assumes 1 variable per joint in the vector, which is standard for simple arms.
             double d = joint->distance(a + i, b + i);
-            dist_sq += d * d;
+            
+            if (joint->getType() == moveit::core::JointModel::PRISMATIC) {
+                dist_sq += revolute_weight_ * d * d;
+            }
+            else
+                dist_sq += d * d;
         }
         return std::sqrt(dist_sq);
     }
     
-    // Required by nanoflann interface for optimizations
-    // Since our distance is complex (state dependent), accumulation is just the full distance logic per dimension?
-    // Nanoflann uses this for early exit. For complex joints, simpler Euclidean might be a safe lower bound, 
-    // but to be correct we should use the joint distance. 
+    // Extremely fast accum_dist using cached pointers
     inline DistanceType accum_dist(const ElementType a, const ElementType b, int i) const {
-        // Warning: This simplistic accum_dist might not work perfectly if access to JointModel requires the index 'i'.
-        // To properly implement this, we'd need access to the specific JointModel for dimension 'i'.
-        // For safety/correctness with minimal changes, we can perform the specific joint calc.
+        if (active_joints_.empty()) return (a - b) * (a - b);
         
-        if (!planning_scene) return (a - b) * (a - b);
-        const moveit::core::RobotState& state = planning_scene->getCurrentState();
-        const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name);
-        if (!jmg) return (a - b) * (a - b);
-        const auto& active_joints = jmg->getActiveJointModels();
-        
-        if (i < active_joints.size()) {
-            double d = active_joints[i]->distance(&a, &b);
-            return d * d;
+        if (i < active_joints_.size()) {
+            const moveit::core::JointModel* joint = active_joints_[i];
+            double d = joint->distance(&a, &b);
+            
+            if (joint->getType() == moveit::core::JointModel::PRISMATIC) {
+                return revolute_weight_ * d * d;
+            }
+            else
+               return d * d;
+            
+            
         }
         return (a - b) * (a - b);
     }
@@ -127,7 +185,7 @@ public:
         if (index_) delete index_;
     }
 
-    void setPlanningScene(planning_scene::PlanningScenePtr scene, const std::string& group = "manipulator") {
+    void setPlanningScene(planning_scene::PlanningScenePtr scene, const std::string& group = "whole_robot") {
         planning_scene_ = scene;
         group_name_ = group;
     }
@@ -179,7 +237,7 @@ public:
     // Brute Force K-NN implementation
     std::vector<VertexDesc> bruteForceKNN(const std::vector<double>& query, size_t k) {
         if (cloud_.points.empty() || !planning_scene_) return {};
-
+        
         size_t search_k = std::min(k, cloud_.points.size());
         
         // Create a temporary metric instance to calculate distances
@@ -204,6 +262,7 @@ public:
         // Extract IDs
         std::vector<VertexDesc> results;
         results.reserve(search_k);
+        
         for (size_t i = 0; i < search_k; ++i) {
             results.push_back(cloud_.points[distances[i].second].id);
         }

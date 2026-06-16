@@ -193,35 +193,60 @@ public:
 /**
      * @brief Samples points strictly inside box_include but OUTSIDE box_exclude.
      * Ensures all points are collision-free via the ValidityChecker.
-     * * @param box_include The bounding box to sample within (B).
+     * @param box_include The bounding box to sample within (B).
      * @param box_exclude The bounding box to exclude (B').
      * @param num_points Number of valid samples to generate.
      * @param out_points Vector to append the results to.
+     * @param range Optional parameter determining max distance of samples from the excluded box.
      * @return true if the requested number of points was successfully sampled.
      */
     bool sampleOutside(const BoundingBox& box_include, const BoundingBox& box_exclude, 
-                       int num_points, std::vector<Eigen::Vector3d>& out_points) {
+                       int num_points, std::vector<Eigen::Vector3d>& out_points, double range = -1.0) {
         
         int valid_count = 0;
         out_points.reserve(out_points.size() + num_points);
 
-        // Setup distributions for the inclusion box
-        std::uniform_real_distribution<double> dist_x(box_include.x_min, box_include.x_max);
-        std::uniform_real_distribution<double> dist_y(box_include.y_min, box_include.y_max);
-        std::uniform_real_distribution<double> dist_z(box_include.z_min, box_include.z_max);
+        // 1. OPTIMIZATION: Shrink the sampling bounds to prevent excessive rejections
+        double sample_x_min = box_include.x_min;
+        double sample_x_max = box_include.x_max;
+        double sample_y_min = box_include.y_min;
+        double sample_y_max = box_include.y_max;
+        double sample_z_min = box_include.z_min;
+        double sample_z_max = box_include.z_max;
+
+        if (range >= 0.0) {
+            sample_x_min = std::max(sample_x_min, box_exclude.x_min - range);
+            sample_x_max = std::min(sample_x_max, box_exclude.x_max + range);
+            sample_y_min = std::max(sample_y_min, box_exclude.y_min - range);
+            sample_y_max = std::min(sample_y_max, box_exclude.y_max + range);
+            sample_z_min = std::max(sample_z_min, box_exclude.z_min - range);
+            sample_z_max = std::min(sample_z_max, box_exclude.z_max + range);
+            
+            // Validate that the new bounds actually intersect
+            if (sample_x_min > sample_x_max || sample_y_min > sample_y_max || sample_z_min > sample_z_max) {
+                ROS_WARN("[Sampler] box_include and the range around box_exclude do not intersect.");
+                return false;
+            }
+        }
+
+        // Setup distributions for the optimized inclusion box
+        std::uniform_real_distribution<double> dist_x(sample_x_min, sample_x_max);
+        std::uniform_real_distribution<double> dist_y(sample_y_min, sample_y_max);
+        std::uniform_real_distribution<double> dist_z(sample_z_min, sample_z_max);
 
         int attempts = 0;
-        const int max_attempts = num_points * 200; // Safety limit to prevent infinite loops
+        const int max_attempts = num_points * 200; // Safety limit
+        double range_sq = range * range;           // Precompute squared range
 
         while (valid_count < num_points && attempts < max_attempts) {
             attempts++;
 
-            // 1. Sample candidate from B (include)
+            // 2. Sample candidate
             double x = dist_x(rng_);
             double y = dist_y(rng_);
             double z = dist_z(rng_);
 
-            // 2. Geometric Exclusion Check: Is point inside B' (exclude)?
+            // 3. Geometric Exclusion Check: Is point inside B' (exclude)?
             bool inside_exclude = (x >= box_exclude.x_min && x <= box_exclude.x_max &&
                                    y >= box_exclude.y_min && y <= box_exclude.y_max &&
                                    z >= box_exclude.z_min && z <= box_exclude.z_max);
@@ -230,8 +255,22 @@ public:
                 continue; // Reject
             }
 
-            // 3. Collision Validity Check
-            // Verify point is not inside any obstacles defined in the validity checker
+            // 4. Range Check (Distance to AABB)
+            if (range >= 0.0) {
+                // Calculate distance from point to the exclusion AABB surface
+                double dx = std::max({0.0, box_exclude.x_min - x, x - box_exclude.x_max});
+                double dy = std::max({0.0, box_exclude.y_min - y, y - box_exclude.y_max});
+                double dz = std::max({0.0, box_exclude.z_min - z, z - box_exclude.z_max});
+                
+                double dist_sq = dx*dx + dy*dy + dz*dz;
+                
+                // Reject if point is further than the requested range
+                if (dist_sq > range_sq) {
+                    continue; 
+                }
+            }
+
+            // 5. Collision Validity Check
             if (validity_checker_ && !validity_checker_->isPointInObstacle(x, y, z)) {
                 out_points.emplace_back(x, y, z);
                 valid_count++;

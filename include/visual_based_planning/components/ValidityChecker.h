@@ -88,8 +88,8 @@ public:
         req.contacts = true; // Request contact details
         req.max_contacts = 10; // Get multiple contacts
         req.verbose = false; // Set to true for spammy logs if needed
-
-        collision_detection::CollisionResult res;
+        
+	collision_detection::CollisionResult res;
         planning_scene_->checkCollision(req, res, state);
         
         /// @todo nice debug output
@@ -202,7 +202,37 @@ public:
         if (mode == EdgeCheckMode::LINEAR) {
             return validateEdgeLinear(start, end, dist);
         } else {
-            return validateEdgeRecursive(start, end, dist);
+            bool res = validateEdgeRecursive(start, end, dist);
+
+
+
+
+            // // Format the start and goal vectors into readable strings
+            // std::ostringstream ss_start, ss_end;
+            // ss_start << "[";
+            // for (size_t i = 0; i < start.size(); ++i) {
+            //     ss_start << start[i] << (i == start.size() - 1 ? "" : ", ");
+            // }
+            // ss_start << "]";
+
+            // ss_end << "[";
+            // for (size_t i = 0; i < end.size(); ++i) {
+            //     ss_end << end[i] << (i == end.size() - 1 ? "" : ", ");
+            // }
+            // ss_end << "]";
+
+            // // Output the formatted ROS_INFO debug block
+            // ROS_INFO("----------------------------------------------------------");
+            // ROS_INFO("[ValidateEdgeRecursive] RESULT");
+            // ROS_INFO("  > Distance:  %.4f", dist);
+            // // ROS_INFO("  > Start:   %s", ss_start.str().c_str());
+            // // ROS_INFO("  > Goal:    %s", ss_end.str().c_str());
+            // ROS_INFO("  > Success: %s", res ? "TRUE" : "FALSE");     
+        
+        
+
+
+            return res;
         }
     }
 

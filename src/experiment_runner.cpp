@@ -11,6 +11,19 @@
 #include <iomanip>
 #include <cmath>
 
+
+#include <yaml-cpp/yaml.h>
+#include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <moveit_msgs/CollisionObject.h>
+#include <shape_msgs/SolidPrimitive.h>
+
+// Struct for representing bounding boxes
+struct AABB {
+    float min_x, max_x;
+    float min_y, max_y;
+    float min_z, max_z;
+};
+
 // Structure to hold a pre-generated target problem
 struct TargetProblem {
     int id;
@@ -67,15 +80,17 @@ public:
         ROS_INFO("Service available.");
 
         ROS_INFO("Pre-generating 100 target problems...");
-        generateTargetProblems();
+        std::string yaml_path;
+        nh_.param<std::string>("sampling_regions_file", yaml_path, "/home/roblab22/catkin_ws/src/visual_based_planning/config/sampling_regions_double_room.yaml");
+        generateTargetProblemsFromRegions(yaml_path);
 
         std::vector<ExperimentConfig> configs = {
-            // {"RRT_VisualIK_ON",  "VisRRT", true,  false},
-            // {"RRT_VisualIK_OFF", "VisRRT", false, false},
+            //  {"RRT_VisualIK_ON",  "VisRRT", true,  false},
+            //  {"RRT_VisualIK_OFF", "VisRRT", false, false},
             // {"PRM_VisualIK_ON_Integrity_ON",   "VisPRM", true,  true},
             // {"PRM_VisualIK_ON_Integrity_OFF",  "VisPRM", true,  false},
-            {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true}
-            // {"PRM_VisualIK_OFF_Integrity_OFF", "VisPRM", false, false}
+            //  {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true},
+             {"PRM_VisualIK_OFF_Integrity_OFF", "VisPRM", false, false}
         };
 
         std::vector<ExperimentResult> all_results;
@@ -94,7 +109,7 @@ public:
             ExperimentResult result;
             result.config_name = cfg.name;
 
-            int num_trials = 100;
+            int num_trials = 20;
             for (int i = 0; i < num_trials; ++i) {
                 
                 nh_.setParam("/target_points", problems_[i].points_flat);
@@ -157,29 +172,113 @@ private:
     std::mt19937 rng_;
     std::vector<TargetProblem> problems_;
 
-    void generateTargetProblems() {
+    void generateTargetProblemsFromRegions(const std::string& yaml_file_path) {
         problems_.clear();
         problems_.reserve(100);
 
-        std::uniform_real_distribution<float> dist_z(0.2, 2.0);
-        std::uniform_real_distribution<float> dist_outer(-2.5, 2.5);
-        std::uniform_real_distribution<float> dist_r(0.03, 0.5);
+        // 1. Read Sampling Regions from YAML
+        std::vector<AABB> regions;
+        try {
+            YAML::Node config = YAML::LoadFile(yaml_file_path);
+            for (const auto& node : config["sampling_regions"]) {
+                AABB region;
+                region.min_x = node["min"][0].as<float>();
+                region.min_y = node["min"][1].as<float>();
+                region.min_z = node["min"][2].as<float>();
+                region.max_x = node["max"][0].as<float>();
+                region.max_y = node["max"][1].as<float>();
+                region.max_z = node["max"][2].as<float>();
+                regions.push_back(region);
+            }
+        } catch (const std::exception& e) {
+            ROS_ERROR("Failed to load sampling regions from %s. Error: %s", yaml_file_path.c_str(), e.what());
+            return;
+        }
+
+        if (regions.empty()) {
+            ROS_ERROR("No sampling regions found. Aborting generation.");
+            return;
+        }
+
+        // 2. Extract Obstacles (AABBs) from MoveIt Planning Scene
+        moveit::planning_interface::PlanningSceneInterface psi;
+        std::map<std::string, moveit_msgs::CollisionObject> objects = psi.getObjects();
+        std::vector<AABB> obstacles;
+
+        for (const auto& kv : objects) {
+            const auto& obj = kv.second;
+            for (size_t i = 0; i < obj.primitives.size(); ++i) {
+                if (obj.primitives[i].type == shape_msgs::SolidPrimitive::BOX) {
+                    float dx = obj.primitives[i].dimensions[shape_msgs::SolidPrimitive::BOX_X];
+                    float dy = obj.primitives[i].dimensions[shape_msgs::SolidPrimitive::BOX_Y];
+                    float dz = obj.primitives[i].dimensions[shape_msgs::SolidPrimitive::BOX_Z];
+
+                    // MoveIt populates primitive_poses to correspond with primitives
+                    float cx = obj.primitive_poses[i].position.x;
+                    float cy = obj.primitive_poses[i].position.y;
+                    float cz = obj.primitive_poses[i].position.z;
+
+                    AABB obs;
+                    obs.min_x = cx - dx / 2.0f;
+                    obs.max_x = cx + dx / 2.0f;
+                    obs.min_y = cy - dy / 2.0f;
+                    obs.max_y = cy + dy / 2.0f;
+                    obs.min_z = cz - dz / 2.0f;
+                    obs.max_z = cz + dz / 2.0f;
+                    obstacles.push_back(obs);
+                }
+            }
+        }
+
+        ROS_INFO("Extracted %zu obstacles from the planning scene.", obstacles.size());
+
+        // 3. Generate Target Problems
+        std::uniform_int_distribution<int> dist_region(0, regions.size() - 1);
         std::normal_distribution<float> dist_norm(0.0, 1.0);
         std::uniform_real_distribution<float> dist_u(0.0, 1.0);
 
         for (int i = 0; i < 100; ++i) {
             TargetProblem prob;
             prob.id = i;
-            prob.cz = dist_z(rng_);
             
-            while (true) {
-                prob.cx = dist_outer(rng_);
-                prob.cy = dist_outer(rng_);
-                if (std::abs(prob.cx) < 1.5 && std::abs(prob.cy) < 1.5) continue;
-                break;
+            bool valid = false;
+            while (!valid) {
+                // Select a region uniformly at random
+                const AABB& reg = regions[dist_region(rng_)];
+                
+                // Sample center point inside the selected AABB
+                std::uniform_real_distribution<float> dist_x(reg.min_x, reg.max_x);
+                std::uniform_real_distribution<float> dist_y(reg.min_y, reg.max_y);
+                std::uniform_real_distribution<float> dist_z(reg.min_z, reg.max_z);
+                
+                prob.cx = dist_x(rng_);
+                prob.cy = dist_y(rng_);
+                prob.cz = dist_z(rng_);
+                
+                // Compute max radius contained within the AABB (shortest distance to bounds)
+                float r_x = std::min(prob.cx - reg.min_x, reg.max_x - prob.cx);
+                float r_y = std::min(prob.cy - reg.min_y, reg.max_y - prob.cy);
+                float r_z = std::min(prob.cz - reg.min_z, reg.max_z - prob.cz);
+                prob.radius = std::min({r_x, r_y, r_z});
+                
+                if (prob.radius <= 0.0f) continue; // Skip degenerate bounds
+
+                // Verify intersection with scene obstacles
+                bool intersection_found = false;
+                for (const auto& obs : obstacles) {
+                    if (checkSphereAABBIntersection(prob.cx, prob.cy, prob.cz, prob.radius, obs)) {
+                        intersection_found = true;
+                        ROS_INFO(" target sphere with center (%.4f,  %.4f, %.4f) is in collision", prob.cx, prob.cy, prob.cz);
+                        break;
+                    }
+                }
+                
+                if (!intersection_found) {
+                    valid = true;
+                }
             }
 
-            prob.radius = dist_r(rng_);
+            // Sample 100 points inside the valid sphere
             prob.points_flat.reserve(100 * 3);
             for (int j = 0; j < 100; ++j) {
                 float x = dist_norm(rng_);
@@ -187,14 +286,15 @@ private:
                 float z = dist_norm(rng_);
                 float norm = std::sqrt(x*x + y*y + z*z);
                 x /= norm; y /= norm; z /= norm;
-                float r_scale = prob.radius * std::cbrt(dist_u(rng_));
                 
+                float r_scale = prob.radius * std::cbrt(dist_u(rng_));
                 prob.points_flat.push_back(prob.cx + x * r_scale);
                 prob.points_flat.push_back(prob.cy + y * r_scale);
                 prob.points_flat.push_back(prob.cz + z * r_scale);
             }
             problems_.push_back(prob);
         }
+        ROS_INFO("Successfully generated 100 non-intersecting targets.");
     }
 
     Stats computeStats(const std::vector<double>& data) {
@@ -288,6 +388,25 @@ private:
             file << "\n\n";
         }
         file.close();
+    }
+
+    bool checkSphereAABBIntersection(float cx, float cy, float cz, float radius, const AABB& box) {
+        float sqDist = 0.0f;
+
+        // Calculate squared distance from the sphere center to the box
+        float v = cx;
+        if (v < box.min_x) sqDist += (box.min_x - v) * (box.min_x - v);
+        if (v > box.max_x) sqDist += (v - box.max_x) * (v - box.max_x);
+
+        v = cy;
+        if (v < box.min_y) sqDist += (box.min_y - v) * (box.min_y - v);
+        if (v > box.max_y) sqDist += (v - box.max_y) * (v - box.max_y);
+
+        v = cz;
+        if (v < box.min_z) sqDist += (box.min_z - v) * (box.min_z - v);
+        if (v > box.max_z) sqDist += (v - box.max_z) * (v - box.max_z);
+
+        return sqDist <= (radius * radius);
     }
 };
 

@@ -21,8 +21,9 @@
 #include "../common/Types.h"
 #include "../components/Sampler.h"
 
-namespace visual_planner {
 
+namespace visual_planner {
+//
 class VisibilityIntegrity {
 public:
     struct Cluster {
@@ -37,12 +38,13 @@ public:
         std::vector<int> visible_samples_union;        // Cached Union of Vis(p)
     };
 
-VisibilityIntegrityParams params_;
+    VisibilityIntegrityParams vi_params_;
+    VisibilityToolParams vis_tool_params_;
 
 
 public:
     VisibilityIntegrity() 
-        : params_(), rng_(std::random_device{}()) {}
+        : vi_params_(), vis_tool_params_(), rng_(std::random_device{}()) {}
 
     void setVisibilityOracle(std::shared_ptr<VisibilityOracle> oracle) {
         vis_oracle_ = oracle;
@@ -52,14 +54,18 @@ public:
         sampler_ = sampler;
     }
 
-    void setParams(const VisibilityIntegrityParams& params) {
-        params_ = params;
+    void setVIParams(const VisibilityIntegrityParams& vi_params) {
+        vi_params_ = vi_params;
+    }
+
+    void setVTParams(const VisibilityToolParams& vis_tool_params) {
+        vis_tool_params_ = vis_tool_params;
     }
 
     void setWorkspaceBounds(const BoundingBox& bounds) {
         workspace_bounds_ = bounds;
     }
-
+    
     const BoundingBox& getWorkspaceBounds() const {
         return workspace_bounds_;
     }
@@ -74,9 +80,9 @@ public:
         }
         
         // 1. Sample Points
-        std::cout << "[VisibilityIntegrity] Sampling " << params_.num_samples << " valid points..." << std::endl;
+        std::cout << "[VisibilityIntegrity] Sampling " << vi_params_.num_samples << " valid points..." << std::endl;
         workspace_samples_.clear();
-        sampler_->sampleValidPoints(params_.num_samples, workspace_samples_, params_.face_samples);
+        sampler_->sampleValidPoints(vi_params_.num_samples, workspace_samples_, vi_params_.face_samples);
         
         // 2. Precompute Visibility between Samples (New Definition of Vis(p))
         std::cout << "[VisibilityIntegrity] Computing sample-to-sample visibility..." << std::endl;
@@ -275,7 +281,7 @@ public:
         std::vector<double> q_vec = {query_point.x(), query_point.y(), query_point.z()};
         
         // Get K nearest points
-        std::vector<VertexDesc> neighbors = point_nn_.kNearest(q_vec, params_.k_neighbors);
+        std::vector<VertexDesc> neighbors = point_nn_.kNearest(q_vec, vi_params_.k_neighbors);
         if (neighbors.empty()) return -1;
 
         // Vote for cluster
@@ -361,11 +367,11 @@ private:
 
     BoundingBox workspace_bounds_; 
 
-    // int params_.num_samples = 1000;
-    // double params_.vi_threshold;
-    // double params_.limit_diameter_factor; 
-    // int params_.k_neighbors = 5; // Default k for query
-    // int params_.face_samples = -1;
+    // int vi_params_.num_samples = 1000;
+    // double vi_params_.vi_threshold;
+    // double vi_params_.limit_diameter_factor; 
+    // int vi_params_.k_neighbors = 5; // Default k for query
+    // int vi_params_.face_samples = -1;
 
     std::shared_ptr<Sampler> sampler_; 
     std::mt19937 rng_;
@@ -479,14 +485,14 @@ private:
                 double dist = (workspace_samples_[curr_idx] - p_first).norm();
 
                 if (c.member_indices.size() >= 5 && max_dist_to_first > 1e-6) {
-                    if (dist > params_.limit_diameter_factor * max_dist_to_first) {
+                    if (dist > vi_params_.limit_diameter_factor * max_dist_to_first) {
                         break; 
                     }
                 }
 
                 double score = calculateVI_Incremental(c, vis_cache_[curr_idx]);
 
-                if (score >= params_.vi_threshold) {
+                if (score >= vi_params_.vi_threshold) {
                     c.member_indices.push_back(curr_idx);
                     point_to_cluster_map_[curr_idx] = c.id; // Map
                     
@@ -605,15 +611,25 @@ private:
         cluster_vis_graph_.clear();
         cluster_vis_graph_.resize(clusters_.size());
 
-        // 1. Define Goal Region
-        Eigen::Vector3d goal_center(0.33, 0.0, 0.33);
-        double goal_radius = 1.2;
+        // 1. Define Goal Region (Axis-Aligned Bounding Box)
+        Eigen::Vector3d goal_min(-3.5, -3.5, 0.0);
+        Eigen::Vector3d goal_max(3.5, 3.5, 1.4);
 
-        // 2. Precompute which clusters intersect the goal
+        // 2. Precompute which clusters intersect the goal box
         std::vector<bool> cluster_intersects_goal(clusters_.size(), false);
         for (size_t i = 0; i < clusters_.size(); ++i) {
-            double dist = (clusters_[i].center - goal_center).norm();
-            if (dist < (clusters_[i].radius + goal_radius)) {
+            const auto& center = clusters_[i].center;
+            double radius = clusters_[i].radius;
+
+            // Find the closest point on the AABB to the sphere's center
+            // cwiseMax and cwiseMin clamp the center coordinates to the box bounds
+            Eigen::Vector3d closest_point = center.cwiseMax(goal_min).cwiseMin(goal_max);
+
+            // Calculate the squared distance from the center to the closest point
+            double squared_dist = (closest_point - center).squaredNorm();
+
+            // Compare squared distance to squared radius to avoid an expensive sqrt() call
+            if (squared_dist <= (radius * radius)) {
                 cluster_intersects_goal[i] = true;
             }
         }

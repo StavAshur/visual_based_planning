@@ -47,6 +47,7 @@ private:
     bool use_visibility_integrity_;
     bool is_initialized_ = false;
     VisibilityIntegrityParams visibility_integrity_params_;
+    VisibilityToolParams visibility_tool_params_;
     int time_cap_;
 
     Ball target_mes_; // Moved to top-level state
@@ -135,7 +136,7 @@ public:
         const moveit::core::RobotState& current_state = scene->getCurrentState();
         current_state.copyJointGroupPositions(group_name_, start_joint_values_);
 
-        workspace_bounds_ = {-3.0, 3.0, -3.0, 3.0, -0.25, 2.5};
+        workspace_bounds_ = {-3.5, 3.5, -3.5, 3.5, 0.0, 2.5};
         sampler_->setWorkspaceBounds(workspace_bounds_);
         validity_checker_->setWorkspaceBounds(workspace_bounds_);
 
@@ -213,6 +214,7 @@ public:
         
         if(use_visibility_integrity_) {
             setVisibilityIntegrityParams(visibility_integrity_params_);
+            setVisibilityToolParams(visibility_tool_params_);
             vis_integrity_->build();
         }
 
@@ -244,8 +246,11 @@ public:
     void setPRMParams(const PRMParams& params) { prm_params_ = params; }
     
     void setVisibilityToolParams(const VisibilityToolParams& params) {
+        visibility_tool_params_ = params;
         vis_oracle_->setVisibilityToolParams(params);
         vis_ik_->setVisibilityToolParams(params);
+        vis_integrity_->setVTParams(params);
+
     }
 
     void setVisibilityThreshold(double t) {
@@ -265,7 +270,7 @@ public:
 
     void setVisibilityIntegrityParams(const VisibilityIntegrityParams& params) {
         visibility_integrity_params_ = params;
-        vis_integrity_->setParams(params);
+        vis_integrity_->setVIParams(params);
     }
 
     void setStartJoints(const std::vector<double>& start) {
@@ -398,7 +403,10 @@ public:
 
         if (!validity_checker_->isValid(start_joint_values_)) {
             ROS_ERROR("Start state is invalid!");
-            return false;
+            for (size_t i = 0; i < start_joint_values_.size(); ++i) {
+                ROS_ERROR("  Joint %lu: %f", i, start_joint_values_[i]);
+            }
+	    return false;
         }
         
         VertexDesc root_id = addState(start_joint_values_);
@@ -447,15 +455,19 @@ public:
             }
 
             // --- Step 2: Nearest Neighbor ---
-            std::vector<VertexDesc> nearest = nn_.kNearest(q_rand, 1);
+            std::vector<VertexDesc> nearest = nn_.bruteForceKNN(q_rand, 1);
             if (nearest.empty()) continue;
             VertexDesc q_near_id = nearest[0];
             std::vector<double> q_near = graph_.getVertexConfig(q_near_id);
 
             // --- Step 3: Extend ---
             std::vector<double> q_new = extend(q_near, q_rand);
-
-            // --- Step 4: Add to Tree ---
+            
+            // DEBUG OUTPUT
+            if ((q_new[0] > 0 && q_new[0] < 2.25) && (q_new[1] > -2.25 && q_new[1] < 2.25)) 
+                ROS_INFO("New cfg is (%.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f)", q_new[0], q_new[1], q_new[2], q_new[3], q_new[4], q_new[5], q_new[6], q_new[7], q_new[8]);
+            
+                // --- Step 4: Add to Tree ---
             if (distance(q_near, q_new) < 1e-4) continue; 
             
             VertexDesc q_new_id = addState(q_new, false);
@@ -597,9 +609,10 @@ public:
         }
 
         int goal_count = 0;
-        int max_iterations = 100; // Outer loop limit to avoid infinite run
+        int max_iterations = 1000; // Outer loop limit to avoid infinite run
         for (int iter = 0; iter < max_iterations; ++iter) {
             // ROS_INFO("Number of connected components in roadmap is: %d", graph_.countConnectedComponents());
+            // ROS_INFO("Number of nodes in roadmap is: %zu", graph_.getNumVertices());
 
             double elapsed = (ros::WallTime::now() - start_time).toSec();
             if (elapsed > time_cap_) {
@@ -712,7 +725,7 @@ public:
     VertexDesc connectToGraph(std::vector<double>& q_connect, int k ,VertexDesc v_id = -1) {
         bool connected = false;
         VertexDesc res;
-        std::vector<VertexDesc> neighbors = nn_.kNearest(q_connect, k);
+        std::vector<VertexDesc> neighbors = nn_.bruteForceKNN(q_connect, k);
         for (auto n_id : neighbors) {
             if (n_id == v_id) continue;
 

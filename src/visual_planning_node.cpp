@@ -241,10 +241,12 @@ public:
             while (!found_random_start) {
                 start = sampler.sampleUniform();
                 found_random_start = validity_checker.isValid(start);
+                // Specifically for the experiments in the double room env
+                found_random_start = !((start[0] > 0) && (start[0] < 2.25) && (start[1] < 2.25) && (start[0] > -2.25));
             } 
 
             success = planner_->planVisPRM(start);
-            success = planner_->planVisPRM();
+            // success = planner_->planVisPRM();
         } else {
             success = planner_->planVisRRT();
         }

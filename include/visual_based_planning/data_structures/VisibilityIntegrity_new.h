@@ -46,10 +46,11 @@ struct VINode {
 
 class VisibilityIntegrity {
 public:
-    VisibilityIntegrityParams params_;
+    VisibilityIntegrityParams vi_params_;
+    VisibilityToolParams vis_tool_params_;
 
     VisibilityIntegrity() 
-        : params_(), rng_(std::random_device{}()) 
+        : vi_params_(), vis_tool_params_(), rng_(std::random_device{}()) 
     {
         // Default bounds
         workspace_bounds_ = {-2.0, 2.0, -2.0, 2.0, 0.0, 2.0};
@@ -63,8 +64,12 @@ public:
         sampler_ = sampler;
     }
 
-    void setParams(const VisibilityIntegrityParams& params) {
-        params_ = params;
+    void setVIParams(const VisibilityIntegrityParams& vi_params) {
+        vi_params_ = vi_params;
+    }
+
+    void setVTParams(const VisibilityToolParams& vis_tool_params) {
+        vis_tool_params_ = vis_tool_params;
     }
 
     void setWorkspaceBounds(const BoundingBox& bounds) {
@@ -94,7 +99,7 @@ public:
         // Initial Convexity Check
         // Use Sampler to get obstacle-free points in the whole workspace
         std::vector<Eigen::Vector3d> S;
-        sampler_->sampleInBox(workspace_bounds_, params_.num_samples, S);
+        sampler_->sampleInBox(workspace_bounds_, vi_params_.num_samples, S);
         
         root_ = std::make_unique<VINode>();
         root_->box = workspace_bounds_;
@@ -341,7 +346,7 @@ private:
         );
     }
 
-
+    
     bool buildTreeRecursive(VINode* node, const BoundingBox& env_bounds, const std::string& idx, int& node_counter, int& leaf_counter) {
         num_nodes_++;
         
@@ -353,15 +358,18 @@ private:
 
         // 1. Sample S_in (Valid points inside current box)
         std::vector<Eigen::Vector3d> S_in;
-        sampler_->sampleInBox(node->box, params_.num_samples, S_in);
+
+        // Decreasing the number of samples for S_in as the box volume decreases 
+        int in_samples_num = std::min(static_cast<double>(vi_params_.num_samples), getBoxVolume(node->box)*30*30*30);
+        sampler_->sampleInBox(node->box, in_samples_num, S_in);
 
         // 2. Sample S_out (Valid points in Env \ box)
         std::vector<Eigen::Vector3d> S_out;
         if (node_counter == 1) {
             // Root node logic
-            sampler_->sampleInBox(node->box, params_.num_samples, S_out);
+            sampler_->sampleInBox(node->box, vi_params_.num_samples, S_out);
         } else {
-            sampler_->sampleOutside(env_bounds, node->box, params_.num_samples, S_out);
+            sampler_->sampleOutside(env_bounds, node->box, vi_params_.num_samples, S_out, vis_tool_params_.beam_length);
         }
 
         // DEBUG: Check sample sizes (casting size_t to unsigned long for %lu)
@@ -426,7 +434,7 @@ private:
 
         // DEBUG: Print Score Details
         // ROS_INFO("Score Calc: %d/%d | Score=%.4f (Thresh: %.4f)", 
-        //         numerator_count, denominator_count, score, params_.vi_threshold);
+        //         numerator_count, denominator_count, score, vi_params_.vi_threshold);
 
         // Termination Criteria
         // Note: We used box_size calculated at the top
@@ -438,8 +446,8 @@ private:
         //             box_size.maxCoeff(), min_dim);
         // }
 
-        if (score > params_.vi_threshold || too_small) {
-            // ROS_INFO("[Node %s] DECISION: LEAF (Final ID: %d)",idx.c_str(), node->id);
+        if (score > vi_params_.vi_threshold || too_small) {
+        //     ROS_INFO("[Node %s] DECISION: LEAF (Final ID: %d)",idx.c_str(), node->id);
             makeLeaf(node);
             leaf_counter++;
         } else {
@@ -580,12 +588,12 @@ private:
                     VINode* u = leaves_[i]; // The "Seer"? Or "Target"?
                     VINode* v = leaves_[j];
                     
-                    bool u_in_sphere = intersectsWorkspaceSphere(u->box);
-                    bool v_in_sphere = intersectsWorkspaceSphere(v->box);
+                    bool u_in_box = intersectsWorkspaceBox(u->box);
+                    bool v_in_box = intersectsWorkspaceBox(v->box);
                     double score = 1.0; // Base score for raw visibility
 
                     // Update u's list with v
-                    if (v_in_sphere) {
+                    if (v_in_box) {
                         u->visible_from_nodes.push_back({v, score});
                     }
 
@@ -635,10 +643,10 @@ private:
                     VINode* seer = it_l->first;
                     double avg_score = (it_l->second + it_r->second) / 2.0;
 
-                    if(intersectsWorkspaceSphere(seer->box)) 
+                    if(intersectsWorkspaceBox(seer->box)) 
                        node->visible_from_nodes.push_back({seer, avg_score});
                     
-                    if(intersectsWorkspaceSphere(node->box))
+                    if(intersectsWorkspaceBox(node->box))
                         seer->visible_from_nodes.push_back({node, avg_score});
 
                     ++it_l;
@@ -747,18 +755,23 @@ private:
         std::queue<VINode*> q;
         q.push(root);
 
-        int n_samples = params_.num_samples;
+        int n_samples = vi_params_.num_samples;
+        
+        double sq_range = std::pow(vis_tool_params_.beam_length, 2);
 
         while (!q.empty()) {
             VINode* u = q.front();
             q.pop();
 
-            // 1. Initial Checks: Convexity and Sphere Intersection
-            bool u_in_sphere = intersectsWorkspaceSphere(u->box);
-            bool v_in_sphere = intersectsWorkspaceSphere(v->box);
-            
+            // 1. Initial Checks: Workspace Intersection and distance
+            bool u_in_box = intersectsWorkspaceBox(u->box);
+            bool v_in_box = intersectsWorkspaceBox(v->box);
+
+            if (distSqBoxBox(u->box, v->box) > sq_range)
+                continue;
+
             // Proceed only if u is convex enough AND at least one node is in the sphere
-            if (u->convexity_score > 0.99 && (u_in_sphere || v_in_sphere)) {
+            if (u->convexity_score > 0.99 && (u_in_box || v_in_box)) {
                 
                 // 2. Sample Points
                 std::vector<Eigen::Vector3d> S_u, S_v;
@@ -809,12 +822,12 @@ private:
                 if (score > 0.99) {
                     
                     // Update u's list if v is relevant (intersects sphere)
-                    if (v_in_sphere) {
+                    if (v_in_box) {
                         u->visible_from_nodes.push_back({v, score});
                     }
 
                     // Update v's list if u is relevant (intersects sphere)
-                    if (u_in_sphere) {
+                    if (u_in_box) {
                         v->visible_from_nodes.push_back({u, score});
                     }
 
@@ -886,6 +899,31 @@ private:
     };
 
 
+    bool intersectsWorkspaceBox(const BoundingBox& b) {
+            // Goal AABB boundaries
+            double goal_x_min = -3.5;
+            double goal_x_max =  3.5;
+            double goal_y_min = -3.5;
+            double goal_y_max =  3.5;
+            double goal_z_min =  0.0;
+            double goal_z_max =  1.4;
+
+            // Check for overlap along the X axis
+            bool overlap_x = (goal_x_min <= b.x_max) && (goal_x_max >= b.x_min);
+            
+            // Check for overlap along the Y axis
+            bool overlap_y = (goal_y_min <= b.y_max) && (goal_y_max >= b.y_min);
+            
+            // Check for overlap along the Z axis
+            bool overlap_z = (goal_z_min <= b.z_max) && (goal_z_max >= b.z_min);
+
+            // The boxes intersect if they overlap on all three axes simultaneously
+            return overlap_x && overlap_y && overlap_z;
+    }
+
+
+
+
     // --- Geometric Helpers for Ball Query ---
 
     // Squared distance from a point to the closest point on a box
@@ -901,6 +939,18 @@ private:
         else if (p.z() > b.z_max) dist_sq += (p.z() - b.z_max) * (p.z() - b.z_max);
         
         return dist_sq;
+    }
+
+
+    // Squared distance between the closest pair of points in two AABBs
+    double distSqBoxBox(const BoundingBox& b1, const BoundingBox& b2) {
+        // Calculate the gap on each axis. 
+        // If the boxes overlap on an axis, both subtractions are negative, resulting in 0.0.
+        double dx = std::max({0.0, b1.x_min - b2.x_max, b2.x_min - b1.x_max});
+        double dy = std::max({0.0, b1.y_min - b2.y_max, b2.y_min - b1.y_max});
+        double dz = std::max({0.0, b1.z_min - b2.z_max, b2.z_min - b1.z_max});
+        
+        return dx * dx + dy * dy + dz * dz;
     }
 
     // Checks if the Box is FULLY contained within the Ball

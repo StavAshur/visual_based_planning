@@ -183,6 +183,12 @@ public:
         std::vector<int> component(boost::num_vertices(G_));
         int num_components = boost::connected_components(G_, &component[0]);
         
+        // --- NEW: Calculate the size (number of nodes) for each component ---
+        std::vector<int> component_sizes(num_components, 0);
+        for (size_t v = 0; v < component.size(); ++v) {
+            component_sizes[component[v]]++;
+        }
+
         std::cout << "[GraphManager] Total Connected Components: " << num_components << std::endl;
 
         // Track which component IDs we have already printed
@@ -198,8 +204,11 @@ public:
                 printed[c_id] = true;
                 count_printed++;
 
-                // Print the representative's configuration
-                std::cout << "  - Component " << c_id << " Rep (Node " << v << "): [";
+                // --- MODIFIED: Included component_sizes[c_id] in the output ---
+                std::cout << "  - Component " << c_id 
+                          << " (Size: " << component_sizes[c_id] << " nodes) "
+                          << "Rep (Node " << v << "): [";
+                          
                 const auto& q = G_[v].joint_config;
                 for (size_t i = 0; i < q.size(); ++i) {
                     std::cout << q[i] << (i < q.size() - 1 ? ", " : "");
