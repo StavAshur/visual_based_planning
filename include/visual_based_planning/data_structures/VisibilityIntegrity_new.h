@@ -59,7 +59,7 @@ public:
     void setVisibilityOracle(std::shared_ptr<VisibilityOracle> oracle) {
         vis_oracle_ = oracle;
     }
-    
+    //
     void setSampler(std::shared_ptr<Sampler> sampler) {
         sampler_ = sampler;
     }

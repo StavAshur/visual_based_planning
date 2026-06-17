@@ -91,6 +91,27 @@ public:
     }
 
 
+    // std::vector<double> sampleUniform() {
+    //     std::vector<double> values;
+
+    //     while (true) {
+    //         // 1. Generate a random configuration
+    //         robot_state_->setToRandomPositions();
+
+    //         // 2. Check the specific joint's value
+    //         double shoulder_val = robot_state_->getVariablePosition("shoulder_lift_joint");
+
+    //         // 3. If it is within [-PI, PI], accept it and break the loop
+    //         if (shoulder_val >= -M_PI && shoulder_val <= M_PI) {
+    //             robot_state_->copyJointGroupPositions(group_name_, values); 
+    //             break; 
+    //         }
+    //     }
+
+    //     return values;
+    // }
+
+
     /**
      * @brief Samples num_points valid 3D points from the workspace.
      * Populates the provided vector to avoid copying.

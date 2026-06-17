@@ -23,7 +23,7 @@
 
 
 namespace visual_planner {
-//
+
 class VisibilityIntegrity {
 public:
     struct Cluster {

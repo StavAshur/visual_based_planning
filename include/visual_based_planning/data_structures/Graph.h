@@ -3,7 +3,8 @@
 #include <algorithm> // for std::reverse
 #include <limits>    // for infinity
 #include <iostream>  // for logging
-
+#include <fstream>
+#include <queue>
 #include <Eigen/Dense>
 #include <Eigen/Geometry> // Required for Eigen::Isometry3d
 
@@ -47,7 +48,8 @@ public:
     }
 
     void addEdge(VertexDesc u, VertexDesc v, double weight) {
-        GraphEdge e; e.weight = weight;
+        GraphEdge e;
+        e.weight = weight;
         boost::add_edge(u, v, e, G_);
         boost::add_edge(v, u, e, G_);
     }
@@ -172,55 +174,198 @@ public:
         G_.clear();
     }
 
-/**
+    /**
      * @brief Computes the number of connected components and prints a representative for each.
+     * @param k Optional argument. If k >= 0, prints only the k largest connected components.
+     * If k < 0 (default), prints all components.
      * @return The number of disjoint subgraphs.
      */
-    int countConnectedComponents() {
+    int countConnectedComponents(int k = -1) {
         if (boost::num_vertices(G_) == 0) return 0;
         
         // Map vertex ID -> Component ID
         std::vector<int> component(boost::num_vertices(G_));
         int num_components = boost::connected_components(G_, &component[0]);
         
-        // --- NEW: Calculate the size (number of nodes) for each component ---
-        std::vector<int> component_sizes(num_components, 0);
+        // --- MODIFIED: Track size and a representative vertex in a single pass ---
+        // component_info maps Component ID -> {Size, Representative Vertex ID}
+        std::vector<std::pair<int, int>> component_info(num_components, {0, -1});
+        
         for (size_t v = 0; v < component.size(); ++v) {
-            component_sizes[component[v]]++;
+            int c_id = component[v];
+            component_info[c_id].first++; // Increment size
+            
+            // If we haven't assigned a representative yet, use this vertex
+            if (component_info[c_id].second == -1) {
+                component_info[c_id].second = v;
+            }
         }
 
         std::cout << "[GraphManager] Total Connected Components: " << num_components << std::endl;
 
-        // Track which component IDs we have already printed
-        std::vector<bool> printed(num_components, false);
-        int count_printed = 0;
+        // --- NEW: Sort components by descending size ---
+        // Create an array of component IDs (0 to num_components - 1)
+        std::vector<int> sorted_cids(num_components);
+        std::iota(sorted_cids.begin(), sorted_cids.end(), 0);
+        
+        // Sort the IDs based on the sizes stored in component_info
+        std::sort(sorted_cids.begin(), sorted_cids.end(), [&component_info](int a, int b) {
+            return component_info[a].first > component_info[b].first;
+        });
 
-        // Iterate through all vertices to find one representative per component
-        for (size_t v = 0; v < component.size(); ++v) {
-            int c_id = component[v];
-            
-            // If we haven't printed a representative for this component yet
-            if (!printed[c_id]) {
-                printed[c_id] = true;
-                count_printed++;
+        // Determine how many components to actually print
+        int print_limit = num_components;
+        if (k >= 0) {
+            print_limit = std::min(k, num_components);
+            std::cout << "               (Displaying top " << print_limit << " largest)" << std::endl;
+        }
 
-                // --- MODIFIED: Included component_sizes[c_id] in the output ---
-                std::cout << "  - Component " << c_id 
-                          << " (Size: " << component_sizes[c_id] << " nodes) "
-                          << "Rep (Node " << v << "): [";
-                          
-                const auto& q = G_[v].joint_config;
-                for (size_t i = 0; i < q.size(); ++i) {
-                    std::cout << q[i] << (i < q.size() - 1 ? ", " : "");
-                }
-                std::cout << "]" << std::endl;
+        // --- MODIFIED: Print only up to the print_limit ---
+        for (int i = 0; i < print_limit; ++i) {
+            int c_id = sorted_cids[i];
+            int size = component_info[c_id].first;
+            int rep_v = component_info[c_id].second;
 
-                // Optimization: Stop if we've found all representatives
-                if (count_printed == num_components) break;
+            std::cout << "  - Component " << c_id 
+                      << " (Size: " << size << " nodes) "
+                      << "Rep (Node " << rep_v << "): [";
+                      
+            const auto& q = G_[rep_v].joint_config;
+            for (size_t j = 0; j < q.size(); ++j) {
+                std::cout << q[j] << (j < q.size() - 1 ? ", " : "");
             }
+            std::cout << "]" << std::endl;
         }
         
         return num_components;
+    }
+
+
+    /**
+     * @brief Checks if two vertices are in the same connected component using BFS.
+     * @param u The first vertex descriptor.
+     * @param v The second vertex descriptor.
+     * @return True if a path exists between u and v, false otherwise.
+     */
+    bool inSameComponent(VertexDesc u, VertexDesc v) {
+        // Trivial case: identical vertices
+        if (u == v) return true;
+
+        size_t num_nodes = boost::num_vertices(G_);
+        
+        // Safety check to prevent out-of-bounds access
+        if (u >= num_nodes || v >= num_nodes) return false;
+
+        std::vector<bool> visited(num_nodes, false);
+        std::queue<VertexDesc> q;
+
+        q.push(u);
+        visited[u] = true;
+
+        while (!q.empty()) {
+            VertexDesc current = q.front();
+            q.pop();
+
+            // Get the neighbors of the current vertex
+            auto neighbors = boost::adjacent_vertices(current, G_);
+            for (auto it = neighbors.first; it != neighbors.second; ++it) {
+                VertexDesc neighbor = *it;
+                
+                // Early exit: We found the target vertex!
+                if (neighbor == v) return true; 
+                
+                if (!visited[neighbor]) {
+                    visited[neighbor] = true;
+                    q.push(neighbor);
+                }
+            }
+        }
+
+        // If the queue empties and we haven't found v, they are disconnected
+        return false;
+    }
+
+
+    /**
+     * @brief Computes connected components and exports all vertices to a text file.
+     * @param filename The output file name (defaults to "cc_map.txt").
+     */
+    void exportCCMap(const std::string& filename = "cc_map.txt") {
+        size_t num_nodes = boost::num_vertices(G_);
+        if (num_nodes == 0) {
+            std::cout << "[GraphManager] Graph is empty. Nothing to export." << std::endl;
+            return;
+        }
+
+        // 1. Compute connected components for the entire graph
+        std::vector<int> component(num_nodes);
+        boost::connected_components(G_, &component[0]);
+
+        // 2. Open the file for writing
+        std::ofstream outfile(filename);
+        if (!outfile.is_open()) {
+            std::cerr << "[GraphManager] Failed to open " << filename << " for writing." << std::endl;
+            return;
+        }
+
+        // 3. Find the dimension of the joint space from the first vertex
+        size_t dim = 0;
+        auto v_range = boost::vertices(G_);
+        if (v_range.first != v_range.second) {
+            dim = G_[*(v_range.first)].joint_config.size();
+        }
+
+        // 4. Write dynamic CSV header (id, j0, j1, ..., jN, cc_id)
+        outfile << "id";
+        for (size_t i = 0; i < dim; ++i) {
+            outfile << ",j" << i;
+        }
+        outfile << ",cc_id\n";
+
+        // 5. Iterate over all vertices and write their data
+        for (auto it = v_range.first; it != v_range.second; ++it) {
+            VertexDesc v = *it;
+            const std::vector<double>& q = G_[v].joint_config;
+
+            // Safety check to ensure the state has at least an x and y coordinate
+            if (q.size() >= 2) {
+                outfile << v;
+                
+                // Print all joint coordinates
+                for (size_t i = 0; i < q.size(); ++i) {
+                    outfile << "," << q[i];
+                }
+                
+                // Append the connected component ID at the very end
+                outfile << "," << component[v] << "\n";
+            }
+        }
+
+        outfile.close();
+        std::cout << "[GraphManager] Successfully exported " << dim << "-DOF configurations to " << filename << std::endl;
+    }
+
+    /**
+     * @brief Prints the in-degree and out-degree of a specified vertex.
+     * @param v_id The vertex ID to query.
+     */
+    void printVertexDegrees(size_t v_id) const {
+        // Ensure the requested vertex actually exists in the graph
+        if (v_id >= boost::num_vertices(G_)) {
+            std::cerr << "[GraphManager] Error: Vertex ID " << v_id 
+                      << " is out of bounds. Max ID is " 
+                      << (boost::num_vertices(G_) - 1) << "." << std::endl;
+            return;
+        }
+
+        // Query degrees using Boost Graph Library functions
+        auto in_deg = boost::in_degree(v_id, G_);
+        auto out_deg = boost::out_degree(v_id, G_);
+
+        std::cout << "[GraphManager] Node " << v_id << " Connectivity:" << std::endl;
+        std::cout << "  - In-degree:  " << in_deg << std::endl;
+        std::cout << "  - Out-degree: " << out_deg << std::endl;
+        std::cout << "  - Total:      " << (in_deg + out_deg) << std::endl;
     }
 
 };

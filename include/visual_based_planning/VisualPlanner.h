@@ -6,6 +6,7 @@
 #include <memory>
 #include <algorithm>
 #include <random>
+#include <set>
 
 // ROS
 #include <ros/ros.h>
@@ -82,6 +83,9 @@ private:
     
     std::mt19937 rng_;
 
+
+    VertexDesc root_id_;
+    std::set<VertexDesc> checked_vertices_;
 public:
     // Constructor
     VisualPlanner(const planning_scene::PlanningScenePtr& scene, 
@@ -97,7 +101,9 @@ public:
           shortcutting_(true),
           use_visual_ik_(false),
           use_visibility_integrity_(false),
-          time_cap_(120)
+          time_cap_(120),
+	      root_id_(-1),
+          checked_vertices_()
     {
         // 1. Initialize Validity Checker first
         validity_checker_ = std::make_shared<ValidityChecker>(scene, resolution);
@@ -409,7 +415,7 @@ public:
 	    return false;
         }
         
-        VertexDesc root_id = addState(start_joint_values_);
+        root_id_ = addState(start_joint_values_);
 
         // Calculate initial sampling radius
         Eigen::Vector3d start_ee = solveFK(start_joint_values_).translation();
@@ -455,7 +461,7 @@ public:
             }
 
             // --- Step 2: Nearest Neighbor ---
-            std::vector<VertexDesc> nearest = nn_.bruteForceKNN(q_rand, 1);
+            std::vector<VertexDesc> nearest = nn_.kNearest(q_rand, 1);
             if (nearest.empty()) continue;
             VertexDesc q_near_id = nearest[0];
             std::vector<double> q_near = graph_.getVertexConfig(q_near_id);
@@ -484,9 +490,9 @@ public:
                 ROS_WARN("VisRRT: Found solution via direct visibility.");
                 double elapsed = (ros::WallTime::now() - start_time).toSec();
                 ROS_WARN("VisRRT: success in %.2f seconds", elapsed);
-                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, q_new_id);
+                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id_, q_new_id);
                 result_path_.clear();
-                finalizePath(root_id, q_new_id);
+                finalizePath(root_id_, q_new_id);
                 return true;
             }
 
@@ -518,9 +524,9 @@ public:
                                 ROS_WARN("VisRRT: Found solution via VisualIK snap.");
                                 double elapsed = (ros::WallTime::now() - start_time).toSec();
                                 ROS_WARN("VisRRT: success in %.2f seconds", elapsed);
-                                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, goal_id);
+                                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id_, goal_id);
                                 result_path_.clear();
-                                finalizePath(root_id, goal_id);
+                                finalizePath(root_id_, goal_id);
                                 return true;
                             }
                         }
@@ -541,36 +547,45 @@ public:
 
         // Use member variable start_joint_values_
         if (start_joint_values_.empty()) {
-            ROS_ERROR("Start joint values not set!");
-            return false;
+            ROS_WARN("Start joint values not set! Sampling random start configuration...");
+            std::vector<double> start_joint_values;
+	        bool found_random_start = false;
+
+            while (!found_random_start) {
+                start_joint_values = sampler_->sampleUniform();
+                found_random_start = validity_checker_->isValid(start_joint_values);
+                // Specifically for the experiments in the double room env
+                found_random_start = !((start_joint_values[0] > 0) && (start_joint_values[0] < 2.25) && (start_joint_values[1] < 2.25) && (start_joint_values[1] > -2.25));
+            } 
+            return planVisPRM(start_joint_values);
         }
 
-        if (!validity_checker_->isValid(start_joint_values_)) {
-            ROS_ERROR("Start state is invalid!");
-            return false;
-        }
         return planVisPRM(start_joint_values_);
     }
 
     bool planVisPRM(std::vector<double> start_joint_values) {
         
         if (start_joint_values.empty()) { ROS_ERROR("Start joint values not set!"); return false; }
-        
+	
         // 1. Add Start Configuration
-        VertexDesc root_id = addState(start_joint_values);  
+        root_id_ = addState(start_joint_values);
+        checked_vertices_.clear();
+	    ROS_WARN("root_id is set to: %zu", root_id_);  
 
         
         size_t start_num_neighbors = (graph_.getNumVertices() > 100) ? prm_params_.num_neighbors : 
                                                                         prm_params_.num_neighbors * 3 ;
         
-        VertexDesc res = connectToGraph(start_joint_values, start_num_neighbors, root_id);
+        VertexDesc res = connectToGraph(start_joint_values, start_num_neighbors, root_id_);
+        
+        bool start_cfg_connected = (res != -1);
 
         std::string success = "SUCCESS";
         std::string failure = "FAILURE";
     
-        ROS_WARN("%s connecting start configuration to roadmap", (res != -1) ? success.c_str() : failure.c_str());
+        ROS_WARN("%s connecting start configuration to roadmap", start_cfg_connected ? success.c_str() : failure.c_str());
 
-        if (root_id == -1) { ROS_ERROR("Start state is invalid!"); return false; }
+        if (root_id_ == -1) { ROS_ERROR("Start state is invalid!"); return false; }
 
         robot_state_->setJointGroupPositions(group_name_, start_joint_values);
         robot_state_->update();
@@ -599,10 +614,10 @@ public:
                 goal_ids.push_back(i);
 
                 // Attempt to find path from Start -> This Node
-                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, i);
+                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id_, i);
                 if (!path_idx.empty()) {
                     ROS_INFO("VisPRM: Path to existing visible node found!");
-                    finalizePath(root_id, i);
+                    finalizePath(root_id_, i);
                     return true;
                 }
             }
@@ -611,18 +626,20 @@ public:
         int goal_count = 0;
         int max_iterations = 1000; // Outer loop limit to avoid infinite run
         for (int iter = 0; iter < max_iterations; ++iter) {
-            // ROS_INFO("Number of connected components in roadmap is: %d", graph_.countConnectedComponents());
+            // ROS_INFO("Number of connected components in roadmap is: %d", graph_.countConnectedComponents(10));
             // ROS_INFO("Number of nodes in roadmap is: %zu", graph_.getNumVertices());
 
             double elapsed = (ros::WallTime::now() - start_time).toSec();
             if (elapsed > time_cap_) {
                 ROS_WARN("VisPRM: Time cap of %d s reached (elapsed: %.2f s). Aborting.", time_cap_, elapsed);
+                graph_.exportCCMap();
                 return false;
             }
 
             // 2.1 Sample Goal Configuration
             if ((goal_count < prm_params_.max_goals) || ( graph_.getNumVertices() >= prm_params_.max_size)) {
-                ROS_INFO("Looking for more goal configurations...");
+                // ROS_INFO("Looking for more goal configurations...");
+		        // ROS_INFO("goal count is %d but max_goals is %d so looking for more goal configurations", goal_count, prm_params_.max_goals);
 
                 bool found_goal = false;
                 std::vector<double> q_goal;
@@ -630,7 +647,19 @@ public:
                 if (use_visibility_integrity_ ) {
                     if (sampleVisibilityGoal(q_goal)) {
                         found_goal = true;
-                        ROS_INFO("Found a goal configuration");
+                        // ROS_INFO("Found a goal configuration");
+                        // ROS_INFO(
+                        //     "New goal configuration is (%.2f, %.2f, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg)",
+                        //     q_goal[0],
+                        //     q_goal[1],
+                        //     angles::to_degrees(q_goal[2]),
+                        //     angles::to_degrees(q_goal[3]),
+                        //     angles::to_degrees(q_goal[4]),
+                        //     angles::to_degrees(q_goal[5]),
+                        //     angles::to_degrees(q_goal[6]),
+                        //     angles::to_degrees(q_goal[7]),
+                        //     angles::to_degrees(q_goal[8])
+                        // );                    
                     }
                 }
 
@@ -652,19 +681,33 @@ public:
 
                 }
             }
+
+
+
+	    // ROS_INFO("Degree of strat vertex:");
+	    // graph_.printVertexDegrees(root_id_);
+
+
             ROS_INFO("Looking for path in roadmap...");
 
             // 2.2 Check for Path
             for (auto g_id : goal_ids) {
-                // Check if start is connected to this goal
-                // We use BFS or Dijkstra. Dijkstra is already available.
-                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, g_id);
-                if (!path_idx.empty()) {
-                    ROS_WARN("VisPRM: Found solution via visibility integrity!");
-                    double elapsed = (ros::WallTime::now() - start_time).toSec();
-                    ROS_WARN("VisPRM: success in %.2f seconds", elapsed);
-                    finalizePath(root_id, g_id);
-                    return true;
+                //ROS_INFO("Degree of goal vertex %zu:", g_id);
+                //graph_.printVertexDegrees(g_id);
+                if (graph_.inSameComponent(root_id_, g_id)) {
+                    ROS_WARN("VisPRM: the start cfg %zu and goal cfg %zu are in the same connected component", root_id_, g_id);
+
+                    // Check if start is connected to this goal
+                    // We use BFS or Dijkstra. Dijkstra is already available.
+                    std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id_, g_id);
+                    if (!path_idx.empty()) {
+                        ROS_WARN("VisPRM: Found solution via visibility integrity!");
+                        double elapsed = (ros::WallTime::now() - start_time).toSec();
+                        ROS_WARN("VisPRM: success in %.2f seconds", elapsed);
+                        finalizePath(root_id_, g_id);
+                        return true;
+                    }
+                // ROS_WARN("VisPRM: No path exists between cfgs %zu and cfg %zu", root_id_, g_id);
                 }
             }
 
@@ -695,12 +738,12 @@ public:
                                 ROS_INFO("VisPRM: New expanded node %lu sees target (Score: %.2f)", v_id, vis_score);
                                 
                                 // Check if this new visible node connects back to the start
-                                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id, v_id);
+                                std::vector<VertexDesc> path_idx = graph_.shortestPath(root_id_, v_id);
                                 if (!path_idx.empty()) {
                                     ROS_WARN("VisPRM: Found solution via roadmap expansion!");
                                     double elapsed = (ros::WallTime::now() - start_time).toSec();
                                     ROS_WARN("VisPRM: success in %.2f seconds", elapsed);
-                                    finalizePath(root_id, v_id);
+                                    finalizePath(root_id_, v_id);
                                     return true;
                                 }
                             }
@@ -708,6 +751,28 @@ public:
                     }
                 }
             }
+
+
+            if (!start_cfg_connected) {
+                ROS_WARN("Attempting to connect start configuration to expanded roadmap...");
+                std::vector<double> q_start = graph_.getVertexConfig(root_id_);
+                VertexDesc res_id = connectToGraph(q_start, prm_params_.num_neighbors, root_id_);
+                if (res_id != -1) {
+                    ROS_WARN("Start configuration is now connected");
+                    start_cfg_connected = true;
+                }
+            }
+            // 2.4 Reconnect Existing Goals to Expanded Roadmap
+            // ROS_INFO("VisPRM: Attempting to connect existing goals to the expanded roadmap...");
+            
+            // for (auto g_id : goal_ids) {
+            //     // Retrieve the joint configuration for the existing goal vertex
+            //     std::vector<double> q_goal = graph_.getVertexConfig(g_id);
+                
+            //     // Pass the configuration, the number of neighbors, and the existing vertex ID
+            //     // to prevent it from creating a duplicate state in the graph.
+            //     connectToGraph(q_goal, prm_params_.num_neighbors, g_id);
+            // }
         }
 
         ROS_WARN("VisPRM: Max iterations reached without solution.");
@@ -722,35 +787,78 @@ public:
     }
 
 
+//     VertexDesc connectToGraph(std::vector<double>& q_connect, int k ,VertexDesc v_id = -1) {
+         
+//	 if (v_id == root_id_)
+//	     ROS_WARN("VisPRM: Trying to connect start vertex to graph");
+//	 bool connected = false;
+//         VertexDesc res;
+//         std::vector<VertexDesc> neighbors = nn_.kNearest(q_connect, k);
+//         for (auto n_id : neighbors) {
+//             if ((n_id == v_id) || (graph_.isEdge(n_id, v_id))) continue;
+
+//             std::vector<double> q_neighbor = graph_.getVertexConfig(n_id); 
+//	         if (v_id == root_id_)
+//		     ROS_WARN("VisPRM: Trying to connect start vertex to vertex %zu", n_id);
+//             if (validateEdge(q_connect, q_neighbor, prm_params_.edge_validation_method)) {
+//		 if (v_id == root_id_)
+//             	     ROS_WARN("VisPRM: Connected start vertex to vertex %zu", n_id);
+//                 if (v_id == -1) {
+//                     res = addState(q_connect);
+//                     graph_.addEdge(res, n_id, distance(q_connect, q_neighbor));
+//                 }
+//                 else{
+//                     graph_.addEdge(v_id, n_id, distance(q_connect, q_neighbor));
+//                 }
+                
+//                 connected = true;
+//            }
+//         }
+        
+//         if (v_id != -1)
+//             return res;
+//         else {
+//             res = connected ? res : -1;
+//             return res;
+//         }
+//     }
+
     VertexDesc connectToGraph(std::vector<double>& q_connect, int k ,VertexDesc v_id = -1) {
         bool connected = false;
-        VertexDesc res;
-        std::vector<VertexDesc> neighbors = nn_.bruteForceKNN(q_connect, k);
+        VertexDesc res = v_id; // Default res to v_id
+         if (v_id == root_id_){
+            // ROS_WARN("VisPRM: Trying to connect start %zu vertex to graph", root_id_);
+            k = k + checked_vertices_.size(); // Increase k to account for already checked vertices
+	    } 
+
+        std::vector<VertexDesc> neighbors = nn_.kNearest(q_connect, k);
+        
         for (auto n_id : neighbors) {
-            if (n_id == v_id) continue;
+            if (v_id == root_id_) {
+                // ROS_WARN("VisPRM: Trying to connect start vertex to vertex %zu", n_id);
+                if (checked_vertices_.find(n_id) != checked_vertices_.end()) {
+                    continue;
+                }
+                checked_vertices_.insert(n_id);
+            }
+            if (n_id == res || graph_.isEdge(n_id, res)) continue; 
 
             std::vector<double> q_neighbor = graph_.getVertexConfig(n_id); 
 
             if (validateEdge(q_connect, q_neighbor, prm_params_.edge_validation_method)) {
-
-                if (v_id == -1) {
+                // If the state hasn't been added to the graph yet, add it ONCE
+                // if (v_id == root_id_)
+                    // ROS_WARN("VisPRM: Connected start vertex to vertex %zu", n_id);
+                if (res == -1) {
                     res = addState(q_connect);
-                    graph_.addEdge(res, n_id, distance(q_connect, q_neighbor));
-                }
-                else{
-                    graph_.addEdge(v_id, n_id, distance(q_connect, q_neighbor));
                 }
                 
+                // Now safely draw the edge
+                graph_.addEdge(res, n_id, distance(q_connect, q_neighbor));
                 connected = true;
             }
         }
-        
-        if (v_id != -1)
-            return res;
-        else {
-            res = connected ? res : -1;
-            return res;
-        }
+        return connected ? res : -1;
     }
 
 

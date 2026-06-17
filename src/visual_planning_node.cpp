@@ -1,5 +1,6 @@
 #include <ros/ros.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
+#include <angles/angles.h>
 
 // Include your headers
 #include "visual_based_planning/VisualPlanner.h"
@@ -233,20 +234,32 @@ public:
 
         bool success = false;
         if (mode.find("PRM") != std::string::npos) {
-            visual_planner::Sampler& sampler = planner_->getSampler();
-            visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
-            std::vector<double> start;
-            bool found_random_start = false;
+//            visual_planner::Sampler& sampler = planner_->getSampler();
+//            visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
+//            std::vector<double> start;
+//            bool found_random_start = false;
 
-            while (!found_random_start) {
-                start = sampler.sampleUniform();
-                found_random_start = validity_checker.isValid(start);
-                // Specifically for the experiments in the double room env
-                found_random_start = !((start[0] > 0) && (start[0] < 2.25) && (start[1] < 2.25) && (start[0] > -2.25));
-            } 
+//            while (!found_random_start) {
+//                start = sampler.sampleUniform();
+//                found_random_start = validity_checker.isValid(start);
+//                // Specifically for the experiments in the double room env
+//                found_random_start = !((start[0] > 0) && (start[0] < 2.25) && (start[1] < 2.25) && (start[1] > -2.25));
+//          	ROS_INFO(             
+//			"New goal configuration is (%.2f, %.2f, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg)",
+//			start[0],
+//			start[1],
+//			angles::to_degrees(start[2]),
+//			angles::to_degrees(start[3]),
+//			angles::to_degrees(start[4]),
+//			angles::to_degrees(start[5]),
+//			angles::to_degrees(start[6]),
+//			angles::to_degrees(start[7]),
+//			angles::to_degrees(start[8])
+//		); 
+//		} 
 
-            success = planner_->planVisPRM(start);
-            // success = planner_->planVisPRM();
+            //success = planner_->planVisPRM(start);
+            success = planner_->planVisPRM();
         } else {
             success = planner_->planVisRRT();
         }
