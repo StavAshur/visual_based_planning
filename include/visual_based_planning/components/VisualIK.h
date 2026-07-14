@@ -163,8 +163,8 @@ public:
 
 
         // Define AABB parameters
-        Eigen::Vector3d box_min(-3.5, -3.5, 0.0);
-        Eigen::Vector3d box_max(3.5, 3.5, 1.4);
+        Eigen::Vector3d box_min(-5.0, -5.0, 0.0);
+        Eigen::Vector3d box_max(5.0, 5.0, 1.4);
 
         // Vector logic: P(t) = a + t * u, for t in [0, 1]
         Eigen::Vector3d u = b - a;

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <random>
 #include <set>
+#include <map>
 
 // ROS
 #include <ros/ros.h>
@@ -26,6 +27,7 @@
 #include "data_structures/NearestNeighbor.h"
 #include "data_structures/VisibilityOracle.h"
 #include "data_structures/VisibilityIntegrity.h"
+#include "data_structures/VisibilityRoadmap.h"
 #include "components/Sampler.h"
 #include "components/ValidityChecker.h"
 #include "components/VisualIK.h"
@@ -46,6 +48,7 @@ private:
     bool shortcutting_;
     bool use_visual_ik_;
     bool use_visibility_integrity_;
+    bool use_visibility_roadmap_;
     bool is_initialized_ = false;
     VisibilityIntegrityParams visibility_integrity_params_;
     VisibilityToolParams visibility_tool_params_;
@@ -73,6 +76,7 @@ private:
     // --- Visibility Components ---
     std::shared_ptr<VisibilityOracle> vis_oracle_;
     std::shared_ptr<VisibilityIntegrity> vis_integrity_;
+    std::shared_ptr<VisibilityRoadmap> vis_roadmap_;
 
     planning_scene::PlanningScenePtr planning_scene_; // Keep reference to scene
 
@@ -85,7 +89,7 @@ private:
 
 
     VertexDesc root_id_;
-    std::set<VertexDesc> checked_vertices_;
+    std::map<VertexDesc,bool> checked_vertices_;
 public:
     // Constructor
     VisualPlanner(const planning_scene::PlanningScenePtr& scene, 
@@ -99,7 +103,7 @@ public:
           ee_link_name_("tool0"),
           rng_(std::random_device{}()),
           shortcutting_(true),
-          use_visual_ik_(false),
+          use_visual_ik_(true),
           use_visibility_integrity_(false),
           time_cap_(120),
 	      root_id_(-1),
@@ -142,7 +146,7 @@ public:
         const moveit::core::RobotState& current_state = scene->getCurrentState();
         current_state.copyJointGroupPositions(group_name_, start_joint_values_);
 
-        workspace_bounds_ = {-3.5, 3.5, -3.5, 3.5, 0.0, 2.5};
+        workspace_bounds_ = {-5.0, 5.0, -5.0, 5.0, 0.0, 2.5};
         sampler_->setWorkspaceBounds(workspace_bounds_);
         validity_checker_->setWorkspaceBounds(workspace_bounds_);
 
@@ -154,6 +158,11 @@ public:
         vis_integrity_->setSampler(sampler_);
         vis_integrity_->setVisibilityOracle(vis_oracle_);
         vis_integrity_->setWorkspaceBounds(workspace_bounds_);
+
+        vis_roadmap_ = std::make_shared<VisibilityRoadmap>();
+        vis_roadmap_->setSampler(sampler_);
+        vis_roadmap_->setVisibilityOracle(vis_oracle_);
+        vis_roadmap_->setWorkspaceBounds(workspace_bounds_); 
 
         // 9. Populate Visibility Oracle with Obstacles and build visibility integrity tool
         initialize_visibility();
@@ -221,7 +230,12 @@ public:
         if(use_visibility_integrity_) {
             setVisibilityIntegrityParams(visibility_integrity_params_);
             setVisibilityToolParams(visibility_tool_params_);
-            vis_integrity_->build();
+
+            if(use_visibility_roadmap_)
+                vis_roadmap_->build();
+            else
+                vis_integrity_->build();
+            
         }
 
     }
@@ -231,6 +245,7 @@ public:
         sampler_->setWorkspaceBounds(bounds);
         validity_checker_->setWorkspaceBounds(bounds);
         vis_integrity_->setWorkspaceBounds(bounds);
+        vis_roadmap_->setWorkspaceBounds(bounds);
     }
 
     void setPlanningScene(const planning_scene::PlanningScenePtr& scene) {
@@ -256,6 +271,7 @@ public:
         vis_oracle_->setVisibilityToolParams(params);
         vis_ik_->setVisibilityToolParams(params);
         vis_integrity_->setVTParams(params);
+        vis_roadmap_->setVTParams(params);
 
     }
 
@@ -265,6 +281,8 @@ public:
     }
 
     void setUseVisualIK(bool use) {
+        ROS_INFO("setting usevisualik to be %d", use);
+
         use_visual_ik_ = use; 
         }
     bool getUseVisualIK() const { return use_visual_ik_; }
@@ -274,9 +292,14 @@ public:
         use_visibility_integrity_ = enable;
     }
 
+    void setUseVisibilityRoadmap(bool enable) {
+        use_visibility_roadmap_ = enable;
+    }
+
     void setVisibilityIntegrityParams(const VisibilityIntegrityParams& params) {
         visibility_integrity_params_ = params;
         vis_integrity_->setVIParams(params);
+        vis_roadmap_->setVIParams(params);
     }
 
     void setStartJoints(const std::vector<double>& start) {
@@ -468,11 +491,7 @@ public:
 
             // --- Step 3: Extend ---
             std::vector<double> q_new = extend(q_near, q_rand);
-            
-            // DEBUG OUTPUT
-            if ((q_new[0] > 0 && q_new[0] < 2.25) && (q_new[1] > -2.25 && q_new[1] < 2.25)) 
-                ROS_INFO("New cfg is (%.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f)", q_new[0], q_new[1], q_new[2], q_new[3], q_new[4], q_new[5], q_new[6], q_new[7], q_new[8]);
-            
+
                 // --- Step 4: Add to Tree ---
             if (distance(q_near, q_new) < 1e-4) continue; 
             
@@ -836,10 +855,10 @@ public:
         for (auto n_id : neighbors) {
             if (v_id == root_id_) {
                 // ROS_WARN("VisPRM: Trying to connect start vertex to vertex %zu", n_id);
-                if (checked_vertices_.find(n_id) != checked_vertices_.end()) {
+                if (checked_vertices_[n_id]) {
                     continue;
                 }
-                checked_vertices_.insert(n_id);
+                checked_vertices_[n_id] = true;
             }
             if (n_id == res || graph_.isEdge(n_id, res)) continue; 
 
@@ -866,9 +885,18 @@ public:
 
         Eigen::Vector3d sample_pos;
 
+        bool sample_found = false;
+
         for (int i = 0; i < attempts; i++) {
             
-            if (vis_integrity_->SampleFromVisibilityRegion(target_mes_, sample_pos, visibility_threshold_)) {
+            if(use_visibility_roadmap_) {
+                sample_found = vis_roadmap_->SampleFromVisibilityRegion(target_mes_, sample_pos, visibility_threshold_);
+            }
+            else {
+                sample_found = vis_integrity_->SampleFromVisibilityRegion(target_mes_, sample_pos, visibility_threshold_);
+            }   
+
+            if (sample_found) {
 
                 Eigen::Matrix3d sample_ori = sampler_->computeLookAtRotation(sample_pos, target_mes_.center);
 

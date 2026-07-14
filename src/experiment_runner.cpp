@@ -37,6 +37,7 @@ struct ExperimentConfig {
     std::string planner_mode;        
     bool use_visual_ik;
     bool use_visibility_integrity;
+    bool use_visibility_roadmap;
 };
 
 struct Stats {
@@ -79,18 +80,17 @@ public:
         client_.waitForExistence();
         ROS_INFO("Service available.");
 
-        ROS_INFO("Pre-generating 100 target problems...");
+        ROS_INFO("Pre-generating 200 target problems...");
         std::string yaml_path;
         nh_.param<std::string>("sampling_regions_file", yaml_path, "/home/roblab22/catkin_ws/src/visual_based_planning/config/sampling_regions_double_room.yaml");
         generateTargetProblemsFromRegions(yaml_path);
 
         std::vector<ExperimentConfig> configs = {
-            // {"RRT_VisualIK_ON",  "VisRRT", true,  false},
-            // {"RRT_VisualIK_OFF", "VisRRT", false, false},
-            // {"PRM_VisualIK_ON_Integrity_ON",   "VisPRM", true,  true},
-            // {"PRM_VisualIK_ON_Integrity_OFF",  "VisPRM", true,  false},
-             {"PRM_VisualIK_OFF_Integrity_ON",  "VisPRM", false, true},
-            // {"PRM_VisualIK_OFF_Integrity_OFF", "VisPRM", false, false}
+            {"VisRRT",  "VisRRT", true,  false, false},
+             {"RRT", "VisRRT", false, false, false},
+             {"VisPRM",  "VisPRM", false, true, false},
+             {"VIR",  "VisPRM", false, true, true},
+             {"PRM", "VisPRM", false, false, false}
         };
 
         std::vector<ExperimentResult> all_results;
@@ -103,13 +103,14 @@ public:
             nh_.setParam("/planner/use_visual_ik", cfg.use_visual_ik);
             nh_.setParam("/planner/visibility_integrity/enabled", cfg.use_visibility_integrity);
             nh_.setParam("/planner/use_visibility_integrity", cfg.use_visibility_integrity);
+            nh_.setParam("/planner/use_visibility_roadmap", cfg.use_visibility_roadmap);
 
             ros::Duration(0.5).sleep(); 
 
             ExperimentResult result;
             result.config_name = cfg.name;
 
-            int num_trials = 20;
+            int num_trials = 200;
             for (int i = 0; i < num_trials; ++i) {
                 
                 nh_.setParam("/target_points", problems_[i].points_flat);
@@ -171,10 +172,16 @@ private:
     ros::ServiceClient client_;
     std::mt19937 rng_;
     std::vector<TargetProblem> problems_;
+    int door_room_counter_=0;
+    int windows_room_counter_=0;
+    bool is_door_;
+    std::vector<bool> room_flags_;
 
     void generateTargetProblemsFromRegions(const std::string& yaml_file_path) {
         problems_.clear();
-        problems_.reserve(100);
+        problems_.reserve(200);
+        room_flags_.clear();
+        room_flags_.reserve(200);
 
         // 1. Read Sampling Regions from YAML
         std::vector<AABB> regions;
@@ -237,7 +244,7 @@ private:
         std::normal_distribution<float> dist_norm(0.0, 1.0);
         std::uniform_real_distribution<float> dist_u(0.0, 1.0);
 
-        for (int i = 0; i < 100; ++i) {
+        for (int i = 0; i < 200; ++i) {
             TargetProblem prob;
             prob.id = i;
             
@@ -275,8 +282,13 @@ private:
                 
                 if (!intersection_found) {
                     valid = true;
+                    bool room_flag = (prob.cx > 0.0);
+                    room_flags_[i] = room_flag;
                 }
+
             }
+            
+
 
             // Sample 100 points inside the valid sphere
             prob.points_flat.reserve(100 * 3);
@@ -294,7 +306,7 @@ private:
             }
             problems_.push_back(prob);
         }
-        ROS_INFO("Successfully generated 100 non-intersecting targets.");
+        ROS_INFO("Successfully generated 200 non-intersecting targets.");
     }
 
     Stats computeStats(const std::vector<double>& data) {
@@ -378,6 +390,11 @@ private:
             file << "\nRun Outcomes (1=Success, 0=Fail): ";
             for (size_t i = 0; i < res.outcomes.size(); ++i) {
                 file << res.outcomes[i] << (i < res.outcomes.size() - 1 ? ", " : "");
+            }
+            file << "\n";
+            file << "\nTarget room (1=windows (right), 0=door (left)): ";
+            for (size_t i = 0; i < res.outcomes.size(); ++i) {
+                file << room_flags_[i] << (i < res.outcomes.size() - 1 ? ", " : "");
             }
             file << "\n";
 

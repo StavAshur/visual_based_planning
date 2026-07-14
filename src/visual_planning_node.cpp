@@ -21,6 +21,7 @@ private:
     bool params_changed_;
     bool use_visual_ik_;
     bool use_visibility_integrity_;
+    bool use_visibility_roadmap_;
     bool current_shortcutting_;
     std::string current_mode_;
 
@@ -38,6 +39,7 @@ public:
         // We assume defaults match the VisualPlanner constructor defaults
         use_visual_ik_ = false;
         use_visibility_integrity_ = false;
+        use_visibility_roadmap_ = false;
         current_shortcutting_ = true;
 
         // Load static config (Bounds, Resolution, etc.)
@@ -85,7 +87,7 @@ public:
         visual_planner::RRTParams rrt; 
         pnh_.param("planner/rrt/goal_bias", rrt.goal_bias, 0.1);
         pnh_.param("planner/rrt/max_extension", rrt.max_extension, 0.5);
-        pnh_.param("planner/rrt/max_iterations", rrt.max_iterations, 10000);
+        pnh_.param("planner/rrt/max_iterations", rrt.max_iterations, 100000);
         planner_->setRRTParams(rrt);
 
         visual_planner::PRMParams prm;
@@ -108,12 +110,16 @@ public:
 
         // Load Time Cap
         int time_cap;
-        pnh_.param("planner/time_cap", time_cap, 120); // Default to 120 if missing
+        pnh_.param("planner/time_cap", time_cap, 60); // Default to 120 if missing
         planner_->setTimeCap(time_cap);
 
         bool use_visibility_integrity;
         pnh_.param("planner/use_visibility_integrity", use_visibility_integrity_, true);
         planner_->setUseVisibilityIntegrity(use_visibility_integrity_);
+
+        bool use_visibility_roadmap;
+        pnh_.param("planner/use_visibility_roadmap", use_visibility_roadmap_, false);
+        planner_->setUseVisibilityRoadmap(use_visibility_roadmap_);
 
         visual_planner::VisibilityIntegrityParams vi_params; // Initialized with defaults from Types.h
         pnh_.param("planner/visibility_integrity_params/num_samples", vi_params.num_samples, vi_params.num_samples);
@@ -132,7 +138,7 @@ public:
         bool new_vis_ik = false;
         if (!nh_.getParam("/planner/use_visual_ik", new_vis_ik)) {
             // If param missing, default to true
-            new_vis_ik = false;
+            new_vis_ik = true;
         }
 
         if (new_vis_ik != use_visual_ik_) {
@@ -144,11 +150,13 @@ public:
 
         // 2. Visibility Integrity (Global)
         bool new_vi = false;
-        if (nh_.getParam("/planner/use_visibility_integrity", new_vi)) {
-            // Found specific param
-        } else if (nh_.getParam("/planner/visibility_integrity/enabled", new_vi)) {
-            // Found nested param
-        }
+        nh_.getParam("/planner/use_visibility_integrity", new_vi);
+        // if (nh_.getParam("/planner/use_visibility_integrity", new_vi)) {
+        //     // Found specific param
+        // } 
+        // else if (nh_.getParam("/planner/visibility_integrity/enabled", new_vi)) {
+        //     // Found nested param
+        // }
 
         if (new_vi != use_visibility_integrity_) {
             planner_->setUseVisibilityIntegrity(new_vi);
@@ -156,8 +164,20 @@ public:
             changed_this_cycle = true;
             ROS_INFO("Param Changed: use_visibility_integrity -> %s", new_vi ? "TRUE" : "FALSE");
         }
-        
-        // 3. Shortcutting (Global)
+
+        // 3. Visibility Roadmap (Global)
+        bool new_vr = false;
+        nh_.getParam("/planner/use_visibility_roadmap", new_vr);
+
+        if (new_vr != use_visibility_roadmap_) {
+            planner_->setUseVisibilityRoadmap(new_vr);
+            use_visibility_roadmap_ = new_vr;
+            changed_this_cycle = true;
+            ROS_INFO("Param Changed: use_visibility_roadmap -> %s", new_vr ? "TRUE" : "FALSE");
+        }
+
+
+        // 4. Shortcutting (Global)
         bool new_shortcutting = true;
         nh_.getParam("/planner/enable_shortcutting", new_shortcutting);
 
@@ -168,7 +188,7 @@ public:
             ROS_INFO("Param Changed: enable_shortcutting -> %s", new_shortcutting ? "TRUE" : "FALSE");
         }
 
-        // 4. Mode (Global)
+        // 5. Mode (Global)
         std::string new_mode;
         nh_.getParam("planner/mode", new_mode);
         if (new_mode != current_mode_) {

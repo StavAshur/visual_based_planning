@@ -29,7 +29,7 @@ namespace visual_planner {
 
     struct PRMParams {
         int num_neighbors = 10;          
-        int num_samples = 1000;  
+        int num_samples = 50;  
         int max_goals = 10;
         EdgeCheckMode edge_validation_method = EdgeCheckMode::BINARY_SEARCH;
         int max_size = 10000;
@@ -37,16 +37,17 @@ namespace visual_planner {
 
     struct VisibilityIntegrityParams {
         int num_samples = 1000;
+        int num_roadmap_samples = 12000;
         double vi_threshold = 0.7;
-        int k_neighbors = 5;
+        int k_neighbors = 15;
         int face_samples = -1;
-        double limit_diameter_factor = 0.5;
+        double limit_diameter_factor = 1000.0;
     };
     
 
     struct VisibilityToolParams {
         double beam_angle = M_PI / 12.0;  // Half-angle in radians
-        double beam_length = 1.0; 
+        double beam_length = 3.0; 
     };
 } // namespace visual_planner
 

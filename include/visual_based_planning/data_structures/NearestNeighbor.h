@@ -49,18 +49,18 @@ struct RobotStateDistance {
     std::string group_name;
     
     std::vector<const moveit::core::JointModel*> active_joints_;
-    double revolute_weight_;
+    double prismatic_weight_;
 
     RobotStateDistance(const DataSource &_data_source, 
                        planning_scene::PlanningScenePtr _scene, 
                        const std::string& _group) 
-        : data_source(_data_source), planning_scene(_scene), group_name(_group), revolute_weight_(1.0) {
+        : data_source(_data_source), planning_scene(_scene), group_name(_group), prismatic_weight_(1.0) {
             if (planning_scene) {
                 const moveit::core::RobotState& state = planning_scene->getCurrentState();
                 const moveit::core::JointModelGroup* jmg = state.getJointModelGroup(group_name);
                 if (jmg) {
                     active_joints_ = jmg->getActiveJointModels();
-                    revolute_weight_ = static_cast<double>(active_joints_.size());
+                    prismatic_weight_ = static_cast<double>(active_joints_.size());
                 }
             }        
         }
@@ -132,10 +132,14 @@ struct RobotStateDistance {
             double d = joint->distance(a + i, b + i);
             
             if (joint->getType() == moveit::core::JointModel::PRISMATIC) {
-                dist_sq += revolute_weight_ * d * d;
+                dist_sq += prismatic_weight_ * d * d;
             }
-            else
-                dist_sq += d * d;
+            else 
+                if (joint->getType() == moveit::core::JointModel::REVOLUTE) {
+                    dist_sq += (active_joints_.size() - i) * d * d;
+                }
+                else
+                    dist_sq += d * d;
         }
         return std::sqrt(dist_sq);
     }
@@ -149,12 +153,13 @@ struct RobotStateDistance {
             double d = joint->distance(&a, &b);
             
             if (joint->getType() == moveit::core::JointModel::PRISMATIC) {
-                return revolute_weight_ * d * d;
+                return prismatic_weight_ * d * d;
             }
-            else
-               return d * d;
-            
-            
+            if (joint->getType() == moveit::core::JointModel::REVOLUTE) {
+                    return (active_joints_.size() - i) * d * d;
+                }
+                else
+                    return d * d;   
         }
         return (a - b) * (a - b);
     }
