@@ -1,0 +1,15 @@
+Possible frameworks:
+
+# This is the more interesxting framework
+GLVisTSP (Global/Local Visibility TSP)
+1. R ← Compute workspace regions
+2. L ← Get a set of robot locations so that the reachable volumes cover R
+3. GTSP ← Compute a global TSP taking the robot to all locations in L
+4. LTSP ← for every location compute a local VisTSP to view targets visible from that region
+5. Return GTSP + LTSP #meaining globaly we follow the GTSP tour, and when reaching a region, we follow the appropriate LTSP tour. 
+
+# This is more of a benchmark method. 
+VisCfgTSP (Visibility Configurations TSP)
+1. T^K ← compute configurations s.t. every target is watched by at least K configurations
+2. TSP ← compute TSP visiting at least one configuration watching each target
+3. Return TSP

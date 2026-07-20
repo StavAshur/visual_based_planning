@@ -1,0 +1,78 @@
+\section{Preliminaries}
+\label{sec:preliminaries}
+
+% \subsection{Forward and inverse kinematics}
+% \sbmp algorithms operate both in \cspace ~and in the workspace $E$. The functions translating configurations in \cspace, that is, vectors of \dof values, and points in $E$ and vice versa are the forward and inverse kinematics functions. Below are the definitions of forward and inverse kinematics we use in this paper. 
+
+% \emph{\textbf{Forward kinematics (\fk).}}
+% The function $\fk:\cspace \longrightarrow E$ takes a configuration $c\in \cspace$ as input and returns the position of $r$'s end-effector in $E$ when it assumes configuration $c$. Note that this position is not a full 6\dof pose, and in the context of visibility-based tools means the apex of the \fov $\C$.
+
+% \emph{\textbf{Inverse kinematics (\ik).}}
+% The function $\ik : E \longrightarrow \cspace$ takes a point $p\in E$ as input and returns a configuration $c$ of $r$ such that $\fk(c)=p$.
+
+\subsection{Problem definition}
+We formally define the \tvmp problem below. While this is, to the best of our knowledge, the first time the problem has been explicitly characterized in literature, it is a fundamental challenge inherent to many real-world applications.
+
+% \paragraph*{\textbf{\tvmp problem definition}}
+Let $r$ be a robot equipped with a visibility-based tool characterized by a conic (or conic frustum) \fov beam $\mathcal{C}$, and let $\visatcfg{x}$ denote the conic \fov emitted from $r$ at configuration $x$. Given an environment (workspace) $E \subseteq \R^3$, a target set $P\subseteq E$, and an initial configuration $s$ of $r$, the goal is to compute a motion plan that transitions $r$ from $s$ to some terminal configuration $t$, such that $P\subseteq \visatcfg{t}$. An illustration is given in Figure \ref{fig:tvmp}b. A natural variant of this problem, termed $\alpha$-\tvmp, requires that at least an $\alpha$-fraction of $P$ is contained within $\visatcfg{t}$, for some $\alpha \in (0, 1)$. Furthermore, this definition may extend to an optimization problem not included in the scope of this work: finding a configuration $t$ that maximizes the visible fraction of $P$.
+
+
+
+\subsection{Simplifying assumptions}
+In this work, we adopt several simplifying assumptions detailed below along with their underlying justifications. 
+
+% \emph{\textbf{\fov parameterization.}}
+% We model the robot's \fov $\C$ as a conic volume with its apex centered on a functional face of the visibility device. The cone is aligned with the face's normal vector and is geometrically defined by an aperture angle $\gamma$ and a range parameter $h$. This choice reflects the standard conic or rectangular frustum-shaped \fov{}s in most directional visibility-based devices. 
+
+\emph{\textbf{Target set.}}
+While the target set $P$ can be any arbitrary set of points in $E$, our algorithms first compute an approximation of the minimum enclosing sphere $P_S$ of $P$, and solve the \tvmp problem for $P_S$ rather than $P$. The reasoning behind this assumption is based on several considerations. 
+\begin{enumerate}
+    \item The most likely use-case for this algorithm may involve a single object or a compact region in $\R^3$.
+    \item The assumption remains valid in the case of multiple target objects not occluded by obstacles.
+    \item The case where the target objects are occluded by obstacles or are placed in close proximity to obstacles, e.g., in different compartments in a shelf or on a table, can be handled by solving an $\alpha$-\tvmp problem.
+\end{enumerate}
+We further assume that the points within $P$ are non-occluding. Given that $P$ is modeled as a sphere, this implies that all viewpoints yielding the same visible surface area are functionally equivalent. Consequently, the planning task does not require a specific orientation relative to the target.
+
+\emph{\textbf{Environment.}}
+We assume that the environment can be sufficiently approximated by basic geometries such as Axis-Aligned Bounding Boxes (\aabb), spheres, \new{or triangular meshes}. This assumption is required to leverage GPU-accelerated operations for processing large batches of visibility queries efficiently. Such approximations of environmental and robotic geometry are standard practice in motion planning literature to ensure computational tractability \cite{tkk-mmvsbp-23}.
+
+\subsection{Visibility integrity (\vi)}
+To efficiently handle visibility queries, \visprm maintains a tree data structure based on the \vi measure \cite{lk-fmtvw-16, zhvml-c3dfrvuvi-19}. The \vi score of a point set is an approximation of the intersection-over-union of their visibility polyhedrons. Thus, \vi measures the degree to which a set of points shares a common visible workspace (see Figure \ref{fig:vi:example}). Given a finite point set $X\subseteq \R^d$, we denote the subset of $X$ visible from a point $p\in \R^d$ by $V_X(p)\subseteq X$. The \vi of a point set $P\subseteq \R^d$ is defined by
+\begin{equation}
+    VI(P) = \frac{|\Set{\bigcap V_X(p)}{p\in P}|}{|\Set{\bigcup V_X(p)}{p\in P}|},
+\end{equation}
+where operator $|\cdot |$ denotes the cardinality of a discrete set. %While the extension to more general settings is simple, it is not required for our purposes and thus omitted for the sake of brevity.
+
+% \begin{figure}[t!]
+%     %\vspace{-0.3cm}
+%     \centering
+%     \begin{subfigure}{\linewidth}
+%     \centering
+%     \includegraphics[width=\linewidth,page=14]{figs/vi_example.pdf}
+%         \caption{}
+%         \label{fig:vi:example:high}
+%     \end{subfigure}
+%     \hfil
+%     \begin{subfigure}{\linewidth}
+%     \includegraphics[width=\linewidth,page=15]{figs/vi_example.pdf}
+%         \caption{}
+%         \label{fig:vi:example:low}
+%     \end{subfigure}
+%     %\vspace{-0.2cm}
+%     \caption{Visibility examples in a planar environment represented by a set of grid points $X$ (black). (a) The blue points exhibit high \vi, as they share nearly identical visibility of the points in $X$. (b) The red points have divergent visibility of points in $X$ yielding a low \vi.}
+%     \label{fig:vi:example}
+%     %\vspace{-0.7cm}
+% \end{figure}
+
+
+\begin{figure}[!t]
+\centering
+\subfloat[]{\includegraphics[width=0.4\linewidth,page=14]{figs/vi_example.pdf}%
+\label{fig:vi:example:high}}
+\hfil
+\subfloat[]{\includegraphics[width=0.4\linewidth,page=15]{figs/vi_example.pdf}%
+\label{fig:vi:example:low}}
+\caption{Visibility examples in a planar environment represented by a set of grid points $X$ (black). (a) The blue points exhibit high \vi, as they share nearly identical visibility of the points in $X$. (b) The red points have divergent visibility of points in $X$ yielding a low \vi.}
+\label{fig:vi:example}
+\vspace{-0.5cm}
+\end{figure}

@@ -1,0 +1,24 @@
+Local Vis TSP:
+
+# This can be used to create a local graph from which to get a local VisTSP 
+Local VisRRG (r, E, B, T, k):
+1) goals ← VIT.sample_target_cfgs(T, k)
+2) G ← connect(goals)
+3) While ∃ i ∈ [n] : goals[i] < k
+   3.1) p ← sample(B) # B is the local bounding box bounding the region we can move in
+   3.2) Q' ← NN_G(p, n_neighbors)
+   3.3) Q ← Extend(Q', p)
+   3.4) for q ∈ Q, t ∈ T: # goals[t] < k (in red)
+          if visibility(FK(q), t)
+            Extend(q, VisIK(q, t))
+
+# This is the general framework for a TSP method. The interesting part is how we determine if a shortcut exists and how we deal with the scenario that a shortcut is hard to find
+TSP Greek Alg:
+1) T ← MST(G)
+2) Π ← Post_order(T)
+3) Π* ← shortcut(Π) # A shortcut should be created with a local planner. If shortcut fails try RRT/VisRRT
+
+
+LocalVisTSP:
+1. G ← LocalVisRRG (r, E, B, T, k)
+2. GreekTSP(G)

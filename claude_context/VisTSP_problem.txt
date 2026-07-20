@@ -1,0 +1,20 @@
+Visibility TSP
+
+Problem definition: 
+Given a robot r with a visibility-based endeffector with conic FOV C = cone(α, h), an environment E, and a set of points P ⊆ R^3, find a motion plan Π such that P ⊆ C(Π)
+where C(Π) = ∪_{x ∈ Π} C(x), and C(x) is the FOV of the device when the robot is in configuration x.
+
+Subproblems:
+# Subproblem 1 should be addressed using the VI-tree multi-target query + a pruning algorithm which will get rid of redundant regions (e.g., that see a target visible from more high-value regions that see many targets)
+1. Given a set P ⊆ R^3, get a set of regions R = {r_1, ..., r_m} where r_i ⊆ R^3, such that for every p ∈ P there are at least k regions r_{i_1}, ..., r_{i_k} s.t.
+for j ∈ [K], p ∈ Vis(r_{i_j})
+that is, at least K regions see the point p.
+
+# Subproblem 2: Looking for a set of locations of the mobile platform that will be sufficient to examine
+2. Given an environment E, m regions R = {r_1, ..., r_m} where r_i ⊆ R^3, each associated with a set of point P_j ⊆ P, and a workspace sphere WS = Sphere(center=[0,0,0], radius) ⊆ R^3 find a set of 2D locations {l_1,...,l_M} on the floor of E such that the sphere translated to these locations covers all of the regions of R. A region is only considered covered if it is contained within a single sphere (i.e., can't cover half with one sphere and another half with a second sphere) or possibly there will be a coverage parameter \beta such that a region is considered covered if a \beta-fraction of its volume is within the a single sphere.
+
+# Subproblem 3: Local plan. Once the robot is in location l_i try and get a plan to see all the targets the location should cover.
+3. Given a robot r, an environment E, a 2D location l associated with a set of points P, and a parameter \delta, find a plan Π for r such that P ⊆ C(Π)  such that the base of r is located within distance \delta from l at all times.
+
+# Subproblem 4: Global plan
+3. Given a robot r, an environment E, and a set of 2D locations {l_1,...,l_M} where each l_i is associated with a set of point P_i ⊆ P,find a motion plan Π for r that takes it to a subset of locations {l_{i_1},...,l_{i_opt}} such that for every p ∈ P, p ∈ P_i for at least one l_j ∈  {l_{i_1},...,l_{i_opt}}.

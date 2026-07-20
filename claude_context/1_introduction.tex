@@ -1,0 +1,58 @@
+\section{Introduction}
+\label{sec:intro}
+
+
+% \begin{figure*}[t!]
+%     \centering
+%     \begin{tabular}{ccc}
+%         \includegraphics[height=3.7cm]{figs/tvmp_labelled.png} & ~~~~~~ &  \includegraphics[height=3.7cm]{figs/physical_experiment_shelf.png} \\
+%         (a) && (b) \\
+%     \end{tabular}   
+%     \caption{(a) An illustration of a UR5 arm with an attached flashlight partially illuminating a set of points. (b) A robotic arm illuminating two red objects positioned in a shelf.}
+%     \label{fig:tvmp}
+%     % \vspace{-0.7cm}
+% \end{figure*}
+
+
+
+
+Robots are becoming ever more prevalent in domestic, agricultural, and industrial settings, and perform increasingly complex tasks for which specialized Task and Motion Planning (\tamp) algorithms are required. The common \tamp algorithms often address problems of finding collision-free paths between start and goal configurations and physically manipulating objects \cite{gchkskl-itamp-21}. However, a wide range of applications require establishing a line-of-sight with a target rather than reaching it. \new{Visibility-based \tamp (\vistamp)} includes the use of robots equipped with instruments such as cameras, lasers or other directional devices in, for example, visual tracking of objects \cite{ch-vsvt-08}, exploration and mapping \cite{lla-amres-21}, search and search-and-rescue problems \cite{st-vso3deumr-10}%, especially for search-and-rescue purposes \cite{ln-rusrscp-13,lzhh-uavsrs-23}
+, and UV-powered surface disinfection \cite{mhtls-ubdrr-23}. 
+
+Unlike grippers, drills, or brushes that necessitate physical interaction, visibility-based instruments feature a large, typically elongated, Field-Of-View (\fov). This unique geometry challenges the relevance of conventional distance metrics commonly employed in sampling-based planning. The configurations from which a device can successfully observe a target vary widely in both configuration space (\cspace) and workspace distance. Crucially, the target need not even be located within the robot's reachable volume, further complicating the use of traditional proximity-based heuristics that assume the target object is at a reachable location. This makes algorithms and heuristics fitted for robots with short range tools ill-suited for visibility-based instruments.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{figure}%[ht!]
+\centering
+\begin{tabular}{cc}
+   \includegraphics[width=0.42\linewidth]{figs/physical_experiment_shelf.png} & \includegraphics[width=0.42\linewidth]{figs/tvmp_labelled.jpeg} \\
+   (a) & (b) 
+\end{tabular}
+\caption{(a) A robotic arm illuminating two red objects positioned in a shelf. (b) An illustration of a UR5 arm with an attached flashlight partially illuminating a set of points. }
+\label{fig:tvmp}
+\vspace{-0.5cm}
+\end{figure}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Many different Visibility Task and Motion Planning (\vistamp) problems have been identified and tackled in robotics and adjacent research fields, although much of this work is only applicable in 2D settings. Existing work on real-world visibility-based systems focuses primarily on inherently local problems using control, as opposed to planning paradigms, and relies on local decisions rather than taking the entire environment into account. We aim to address this gap using Sampling-Based Motion Planning (\sbmp) methods, commonly used in \tamp algorithms, to produce global solutions for visibility tasks. 
+
+Much of the foundational literature focuses on 2D environments where visibility algorithms are abundant and efficient \cite{g-vap-07}, leading to robust solutions for tracking moving targets \cite{lgbl-msmvmt-97} and multi-agent coordination \cite{rl-mrtdtts-16}. However, extending these tasks to 3D space introduces high computational costs and susceptibility to floating-point errors \cite{d-3dvasa-99}. While some spatial approaches utilize Sampling-Based Motion Planning (SBMP) \cite{kslo-prpp-96}, they often rely on simplifying assumptions, such as omni-directional sensor models \cite{smh-sbccrfo3de-05} or unconstrained environments \cite{w-vbopmp-17}. Furthermore, a large body of work on real-world visibility systems, including visual servoing and visual tracking, focuses on inherently local problems \cite{bah-mp3dttao-07, ch-vsvt-08}. These methods typically assume the target is already within the \fov and employ reactive control strategies to maintain visibility \cite{daop-mvdoceummvfi-23}. Such local paradigms are unsuitable for global visibility tasks in constrained environments where the target must first be placed inside the \fov.
+
+\new{While sampling-based planners like \rrt and \prm are well-explored for physical obstacle avoidance, extending them to visibility-driven tasks introduces distinct geometric challenges due to the non-compact, elongated nature of 3D sensor FOVs. This paper bridges this gap by formalizing the Target Visibility Motion Planning (\tvmp), a \vistamp-type problem. \tvmp algorithms provide the essential building blocks required for complex, visibility-dependent tasks (such as 3D visual coverage, visibility-based routing, and multi-robot line-of-sight coordination) where standard planners fundamentally fail to guarantee efficient workspace exploration.} We introduce \sbmp algorithms to solve \tvmp in constrained spatial environments, making them applicable across a wide variety of real-world robotic platforms. 
+
+The challenges of \vistamp are addressed through three key contributions. First, we introduce the \emph{Visibility Integrity} (\vi) tree, a novel data structure designed to capture workspace visibility and provide rapid heuristic solutions for complex visibility polyhedron queries. The tree hierarchically partitions the environment into distinct regions, where points within each region maintain approximately uniform visibility characteristics and can be used in the creation of algorithms solving other spatial \vistamp problems. Second, building upon this structure and other building blocks, we present specialized variants of the Probabilistic Roadmap (\prm) \cite{kslo-prpp-96} and Rapidly-exploring Random Tree (\rrt) \cite{l-rrtnt-98} algorithms, termed Visibility-\prm (\visprm) and Visibility-\rrt (\visrrt), respectively. Finally, we provide a comprehensive evaluation of these algorithms in both simulated and real-world environments. Our experimental results, including a physical demonstration with a robot-mounted flashlight (Figure \ref{fig:tvmp}a), reveal significant performance gains in runtime and success rate over \new{\prm \cite{mrph-ocpuvsd-21}, \rrt, and Visibility Roadmap (\vir) \cite{zhvml-c3dfrvuvi-19} benchmarks adapted for \tvmp}. The planner code is open-source\footnote{Link to open-source planner code redacted for author anonymity and will be released upon acceptance.} for potential benchmarks and to advance research in the field.
+
+
+% In this paper, we formalize the Target Visibility Motion Planning (\tvmp) problem, \new{a \vistamp-type problem}, and introduce \sbmp algorithms to solve it within constrained spatial environments, making them applicable across a wide variety of real-world robotic platforms. We address the challenges of \vistamp through three key contributions. First, we introduce the \emph{Visibility Integrity} (\vi) tree, a novel data structure designed to capture workspace visibility and provide rapid heuristic solutions for complex visibility polyhedron queries. The tree hierarchically partitions the environment into distinct regions, where points within each region maintain approximately uniform visibility characteristics and can be used in the creation of algorithms solving other spatial \vistamp problems. Second, building upon this structure and other building blocks, we present specialized variants of the Probabilistic Roadmap (\prm) \cite{kslo-prpp-96} and Rapidly-exploring Random Tree (\rrt) \cite{l-rrtnt-98} algorithms, termed Visibility-\prm (\visprm) and Visibility-\rrt (\visrrt), respectively. Finally, we provide a comprehensive evaluation of these algorithms in both simulated and real-world environments. Our experimental results, including a physical demonstration with a robot-mounted flashlight (Figure \ref{fig:tvmp}a), reveal significant performance gains in runtime and success rate over standard \prm \cite{mrph-ocpuvsd-21} and \rrt benchmarks adapted for the visibility task. The planner code is open-source\footnote{Link to open-source planner code redacted for author anonymity and will be released upon acceptance.} %is available at \href{https://github.com/StavAshur/visual_based_planning}{https://github.com/StavAshur/visual\_based\_planning}}
+% {\texttt{\color{blue}\tvmp repository}}} 
+% for potential benchmarks and to advance research in the field. 
+
+
+% To this end, we introduce a novel data structure of independent interest termed the \emph{Visibility Integrity} (\vi) tree. The tree hierarchically partitions the environment into distinct regions, where points within each region maintain approximately uniform visibility characteristics and can be used in the creation of algorithms solving other spatial \vistamp problems. 
+
+
+
+% \paragraph*{Paper layout} 
+% In Section \ref{sec:related:work}, we review some relevant literature pertaining to \sbmp and robot \vistamp in the plane and in 3D.
+% In Section \ref{sec:preliminaries}, we introduce the notations and definitions used throughout the paper, including the \vi function.
+% In Section \ref{sec:method}, we describe \visrrt and \visprm. We start by presenting the algorithmic components developed to allow the algorithms to solve visibility tasks, the \vi-tree, and a modified \ik solver, and then proceed with pseudocodes coupled with detailed explanations. In Section \ref{sec:experiments}, we present the experiments conducted to demonstrate our algorithms' advantage over existing methods and discuss their results. Finally, a conclusion of the paper and planned future work is in Section \ref{sec:conclusion}.   

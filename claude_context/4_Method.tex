@@ -1,0 +1,344 @@
+\section{Method}
+\label{sec:method}
+
+In this section, we present the proposed \vistamp algorithms \visprm and \visrrt. We begin by introducing two algorithmic components that enable \prm and \rrt to address the \tvmp problem. Specifically, we describe the \vi-tree and the visibility \ik solver in Section \ref{sec:method:adjusments}. The pseudocode and a detailed explanation of \visprm and \visrrt are given in Sections \ref{sec:method:visprm} and \ref{sec:method:visrrt}, respectively. Assuming familiarity with the standard \prm and \rrt algorithms, we focus on the modifications that distinguish \visprm and \visrrt from their traditional counterparts.
+
+
+\subsection{Adjustments to \sbmp algorithms}
+\label{sec:method:adjusments}
+
+The primary challenge in adapting \prm and \rrt for \tvmp is the absence of a predefined goal configuration. Unlike the motion planning problem where both start and goal configurations are explicitly provided as input, the \tvmp query provides only a start configuration and a set of target points $P$ that must be observed. To address the challenge of identifying suitable goal configurations, we introduce two algorithmic components. First, the \vi-tree guides \visprm in sampling goal regions with high visibility potential\remove{that can be connected to the roadmap}. Second, a visibility-aware \ik solver leverages seed configurations to generate goals for \visrrt extensions. 
+
+
+\subsubsection{Visibility integrity tree}
+\label{sec:method:visibility:integrity:tree}
+
+Identifying a valid goal configuration mandates reasoning over workspace visibility, as the implicit goal set corresponds to the intersection of visibility polyhedrons associated with the points of $P_S$. Formally, the objective is to find a set of goal configurations $\mathcal{T}$ such that every $t\in \mathcal{T}$ satisfies $P_S \subset \visatcfg{t}$. Hence, we require a computational mechanism that can efficiently identify workspace regions from which $P_S$ is visible. Computing 3D visibility polyhedrons is expensive, and exact algorithms are prone to numerical errors \cite{d-3dvasa-99}. We propose a tree-based data structure that partitions the environment into regions characterized by high \vi scores and captures their mutual visibility relationships. Then, given a query $P_S$, regions with good visibility of $P_S$ can quickly be located.  
+
+Pseudocode of the tree building process is given in Algorithm \ref{alg:vi:tree}. The root of the tree is assigned with an \aabb containing the entire workspace $E$ (Line \ref{vi:tree:line:root}). A recursive tree-building function is called in Line \ref{vi:tree:line:recursive:tree}. Below we describe the recursive function, after which we continue to the second part of Algorithm \ref{alg:vi:tree} in which visibility relationships between regions are inferred. 
+
+
+
+The construction of the \vi-tree, detailed in Algorithm \ref{alg:vi:tree:recursive}, recursively generates the subtree for an input root node. First, samples are taken from within the root's \aabb (Line \ref{vi:tree:recursive:line:ample:in}) and from its complement (Line \ref{vi:tree:recursive:line:ample:out}). This sample partitioning reflects our application of \vi in establishing global visibility relationships between disjoint regions. The outward-\vi computation (Line \ref{vi:tree:recursive:line:vi}) serves as the termination criterion for the recursion. If the resulting score satisfies the leaf-node condition, the algorithm concludes for that branch. Otherwise, the current \aabb is split (Line \ref{vi:tree:recursive:line:split}), and the procedure recursively initializes two child nodes. See Figure \ref{fig:svi:leaves} for a visualization of the leaf \aabb{}s in a \vi-tree. 
+
+
+
+Returning to Algorithm \ref{alg:vi:tree}, after the tree structure is finalized the algorithm performs a bottom-up process of populating the nodes' visibility lists, containing the information regarding mutual visibility in the workspace. Starting at the leaves (Line \ref{vi:tree:line:leaf:visibility}), the centers of every pair of leaves $\set{l_1,l_2}$ are tested for mutual visibility, and, if successful, they are added to each other's lists. The minimum outward-\vi score of the leaves ensures that point-to-point visibility generalizes to the majority of the pairs in $l_1.aabb \times l_2.aabb$. Following leaf processing, the algorithm performs a post-order traversal (Line \ref{vi:tree:line:bottom:up}) to propagate visibility information upward. Each internal node's visibility list is defined as the intersection of its children's lists. Simultaneously, the node is inserted into the visibility lists of those appearing in the intersection. This completes the tree construction.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}
+    \caption{Visibility-integrity tree construction}%
+    \label{alg:vi:tree}
+    \SetAlgoLined%
+    \SetKwInOut{Input}{input}
+    \SetKwInOut{Output}{output}
+
+    \Input{Environment $E$, threshold $\tau$}
+
+    \tcp{\color{OliveGreen}\# Building \vi tree}
+    $root.aabb \gets E.\func{get\_bounding\_box}()$ \Comment{get AABB of the entire environment}
+    \label{vi:tree:line:root}\\
+    % $S \gets \func{sample\_uniform}(b, n_{samples})$\\
+    % $score \gets \frac{|\func{seen\_by\_all}(S,S)|}{|\func{seen\_by\_any}(S,S)|}$
+    % \Comment{\vi computation}
+    % \label{vi:tree:line:vi:main}\\
+    % \If{$score > \tau$}{
+    %     $root.is\_leaf \gets \True$\\
+    %     \Return
+    % }\Else{
+    $T\gets \func{build\_tree\_recursive}(root, \tau)$
+    \label{vi:tree:line:recursive:tree} \newComment{Alg. \ref{alg:vi:tree:recursive}}
+    % }
+    
+    \tcp{\color{OliveGreen}\# Computing visibility bottom-up}
+    $P \gets \Set{l.aabb.center}{ l \in T.leaves}$
+    \Comment{leaf centers}\\
+    $M_{vis} \gets \func{pairwise\_visibility}(P)$
+    \label{vi:tree:line:pairwise:leaf:visibility}\\
+    \ForEach{$\set{l_1,l_2}\in \binom{T.leaves}{2}$ \label{vi:tree:line:leaf:visibility}}{
+        \If{$M_{vis}[l_1.idx][l_2.idx] = 1$}{
+            $l_1.visibility\_list.\func{insert}(l_2.idx)$\\
+            $l_2.visibility\_list.\func{insert}(l_1.idx)$\\
+        }
+    }
+    \ForEach{$v \in \func{post\_order(T)}$\label{vi:tree:line:bottom:up}}{
+        $seen\_by\_children \gets v.left.visibility\_list \cap v.right.visibility\_list$\\
+        $v.visibility\_list \gets seen\_by\_children$\\
+        \ForEach{$u \in seen\_by\_children$}{
+            $T.nodes[u].visibility\_list.\func{insert}(v.idx)$
+        }
+    }
+   \Return
+\end{algorithm}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}[b]
+    \caption{Recursive construction of the VI-tree}%
+    \label{alg:vi:tree:recursive}
+    \SetAlgoLined%
+    \SetKwInOut{Input}{input}
+    \SetKwInOut{Output}{output}
+    \Input{Node $root$, threshold $\tau$}
+    $b \gets root.aabb$\\
+    $S_{in} \gets \func{sample\_uniform}(b, n_{samples})$
+    \label{vi:tree:recursive:line:ample:in}\\
+    $S_{out} \gets \func{sample\_uniform}(E.\func{get\_bounding\_box}() \setminus b , n_{samples})$
+    \label{vi:tree:recursive:line:ample:out}
+    \newComment{sample outside \aabb}\\
+    $score \gets \frac{|\func{seen\_by\_all}(S_{in},S_{out})|}{|\func{seen\_by\_any}(S_{in},S_{out})|}$ \Comment{\vi computation}
+    \label{vi:tree:recursive:line:vi}\\
+    \If{$score > \tau$}{
+        $root.is\_leaf \gets \True$ \new{\newComment{this node is a leaf}}\\
+        $T.leaves.\func{insert}(root)$\\
+        \Return
+    }\Else{
+        \tcp{\color{red}\# create children and recurse}
+        $b_{l}, b_{r} \gets \func{split\_aabb}(b)$
+        \label{vi:tree:recursive:line:split}
+        \Comment{split root's \aabb}\\
+        $root.left \gets \func{build\_tree\_recursive}(root, b_{l})$\\
+        $root.right \gets \func{build\_tree\_recursive}(root, b_{r})$
+    }
+    \Return  
+\end{algorithm}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% \begin{figure}[t!]
+%     \centering
+%     \begin{tabular}{ccc}
+%         \includegraphics[trim={0mm 10mm 0mm 10mm}, clip, height=5cm]{figs/Env.pdf} & ~~~~~ &  \includegraphics[trim={0mm 10mm 0mm 10mm}, clip, height=5cm]{figs/VI_Env.pdf}\\
+%         (a) && (b) \\
+%     \end{tabular}
+%     \caption{(a) An \aabb{} example environment of a wall with a window, and (b) the corresponding partitioning of the \vi-tree.}% The \vi threshold used is $0.7$ with $n_{samples}=1,000$.}
+%     \label{fig:svi:leaves}
+% \end{figure}
+
+\begin{figure}
+
+\centering
+\subfloat[]{\includegraphics[trim={0mm 10mm 0mm 10mm}, clip, width=0.48\linewidth]{figs/Env.png}%
+\label{fig_env_a}}
+\hfil
+\subfloat[]{\includegraphics[trim={0mm 10mm 0mm 10mm}, clip, width=0.48\linewidth]{figs/VI_Env.pdf}%
+\label{fig_env_b}}
+\caption{(a) An example environment of a wall with a window, and (b) the corresponding leaf \aabb{}s of the \vi-tree.}
+\label{fig:svi:leaves}
+\vspace{-0.5cm}
+\end{figure}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\paragraph{Query} \label{par:vi:tree:query} The result of a query to the \vi-tree, whose pseudocode is presented in Algorithm \ref{alg:vi:tree:query}, is a map (dictionary) with $(node, volume)$ pairs that associate between nodes of the tree and an estimated lower bound on the fraction of the target's volume they see. The query is recursive, and begins at the root of the tree. When visiting a node $v$, the base case is checked. If $v.aabb$ is contained in $P_S$ or is a leaf, the result list is updated with $v$'s visibility list and, for each member of the list, an estimated fraction of $v.aabb \cap P_S $ it sees (Line \ref{vi:tree:query:line:base:intersect}). Otherwise, recursive calls to the children are made in Line \ref{vi:tree:query:line:recurse}, assuming their \aabb{}s intersect $P_S$.
+
+
+
+
+\subsubsection{Visibility Inverse Kinematics function}
+\label{sec:method:vis:ik}
+
+
+Standard \ik computations return a configuration that places the robot's end-effector at a specific position or pose. In \vistamp settings, we require an \ik map (i.e., $\ik : E \longrightarrow \mathcal{C}_{space}$) that outputs a configuration $c$ such that $P_S \subset \visatcfg{c}$. Hence, our visibility-based \ik solver (\visik) does not receive an input pose, but must instead derive a suitable pose from the input target $P_S$. \new{To focus this optimization, \visik relies on a seed configuration $g$, which acts as a geometric hint representing a valid robot posture whose end-effector has an unobstructed line-of-sight to the target. This allows \visik to restrict its search to configurations pointing directly at the target. This dependency on a seed arises} from the inherently global nature of the \fov’s role as an end-effector, where small changes in \cspace{} or $E$ can lead to significant shifts in the projected visibility. Consequently, we attempt to produce meaningful output configurations by requiring that for the seed configuration $g$, $P_S \cap \visatcfg{g} > \beta$ holds; that is, the position of the end-effector at configuration $g$ sees a minimum fraction of the target. Under this assumption, we can increase the value of returned configurations without explicitly reasoning over visibility.
+
+\vspace{-0.3cm}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}
+    \caption{Recursive VI-tree query}%
+    \label{alg:vi:tree:query}
+    \SetAlgoLined%
+    \SetKwInOut{Input}{input}
+    \SetKwInOut{Output}{output}
+    \Input{Node $root$, target set $P_S$, result map $res$}
+    \tcp{\color{OliveGreen}\# base case - contained or leaf}
+    \If{$root.aabb \subseteq P_S ~\Or~ root.is\_leaf $ \label{vi:tree:query:line:base:intersect}} {
+        \ForEach{$v \in root.visibility\_list$}{
+            $normalized\_volume \gets \frac{\func{volume}(root.aabb \cap P_S)}{\func{volume}(P_S)}$
+            \Comment{visibility value of seeing $root$}
+            \label{vi:tree:query:line:volume}\\
+            \If{$v \in res.keys$}{
+                $res[v] \gets res[v] + normalized\_volume$
+            }
+            \Else{
+                $res.\func{insert}(v, normalized\_volume)$
+            }
+        }
+        \Return
+    }
+    \tcp{\color{OliveGreen}\# recursive calls}
+    \If{$root.left.aabb \cap P_S \neq \emptyset$ \label{vi:tree:query:line:recurse}} {
+        $\func{recursive\_vi\_query}(root.left, P_S, res)$
+    }
+    \If{$root.right.aabb \cap P_S \neq \emptyset$} {
+        $\func{recursive\_vi\_query}(root.right, P_S, res)$
+    }
+    \Return
+\end{algorithm}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+Using the simplifying assumption converting $P$ into the sphere $P_S$, the algorithm computes a workspace line segment $\overline{s}$ \new{which is contained in the line defined by the position of the end-effector and the center of $P_s$. Hence, }any point $x\in \overline{s}$ has the same visibility of $P_S$ as the end-effector's position of $r$ at the seed configuration $g$. This is done by searching along the line connecting $p=\fk(g)$ to the center of $P_S$, where function $\fk:\mathcal{C}_{space} \longrightarrow E$ is the position Forward Kinematics (\fk) of $r$. The segment $\overline{s}$ is further intersected with the $r$'s reachable volume to rule out unreachable poses.
+
+Once the segment $\overline{s}$ is finalized, it is discretized into a series of positions. Each position is lifted to a full $SE(3)$ pose by aligning the "forward" axis with the center of $P_S$. A standard \ik solver can then process these intermediate poses to generate a sequence of configurations. Although computationally expensive, we perform these \ik calls immediately to enable a \cspace{} nearest-neighbor search between the seed configuration and the intermediates. Any \ik solver can be used as a black box for this purpose, making this subroutine easy to implement and optimize. The algorithm then evaluates these configurations in order of increasing distance from the seed, returning the first valid result. This prioritization of \cspace ~proximity is particularly beneficial in \visrrt (Algorithm \ref{alg:vis:rrt}). Given a valid seed $g$, a proximal configuration is more likely to share that validity, thereby increasing the probability of a successful tree extension.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\remove{
+    \begin{algorithm}
+        \caption{Visibility Inverse Kinematics (\visik)}%
+        \label{alg:visik}
+        \SetAlgoLined%
+        \SetKwInOut{Input}{input}
+        \Input{Robot $r$, seed configuration $g$, target set $P_S$}
+    
+        $p \gets \funcfk(g)$ \newComment{inverse kinemtaics}\\
+        \tcp{\color{OliveGreen}\# Computing the extremal points allowing visibility of $P_S$}
+            %  Eigen::Vector3d a = c - (h - r) * v;
+            % Eigen::Vector3d b = c - (r / std::tan(theta / 2.0)) * v;
+        % $a \gets  e - (h - R) \cdot v$;
+        % \label{visik:line:a}\\
+        % ~~$b \gets e - \frac{R}{\tan(\theta / 2)} \cdot v$
+        % \label{visik:line:b}\\
+        $\overline{ab} \gets \func{compute\_feasible\_segment}(p,P_S.center,r.\C)$ \label{visik:line:ab}\\
+        $\overline{s} \gets \overline{s} \cap \func{reachable\_volume}(r)$
+        \label{visik:line:intersect:ab:workspace}\\
+        $s \gets \func{compute\_intermediates}(\overline{s},\varepsilon)$
+        \Comment{discretize $\overline{s}$}
+        \label{visik:line:discretize}\\
+        $I \gets \emptyset$\\
+        \ForEach{$x\in s$}{
+            $pose \gets \func{pose\_from\_direction}(x,\overline{s})$ 
+            \Comment{get full pose from a direction}
+            \label{visik:line:get:pose}\\
+            $I.\func{insert}(\ik(pose))$\\
+        }
+        $o \gets \func{NN}(g, I)$ 
+        \Comment{get closest intermediate configurations}
+        \label{visik:line:nearest:intermediate}\\
+        \ForEach{$x \in I$ in increasing distance from $g$} {
+            \If{$\func{is\_valid}(x)$} {
+                $\Return$ $x$
+            }
+        }
+        $\Return$  \Term{INVALID}
+    \end{algorithm}
+}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\subsection{Visibility \prm}
+\label{sec:method:visprm}
+
+Algorithm \ref{alg:vis:prm} contains the pseudocode of \visprm, a modified \prm algorithm capable of solving multi-query \tvmp. To maintain brevity, we present the construction and query phases within a unified algorithm, formulated around a single query $(s, P_S)$ as the primary input argument. The algorithm starts by constructing the two data structures that serve as the backbone of the algorithm: A \cspace{} roadmap graph $G$ is constructed in Line \ref{prm:line:c:space:prm} \new{as in the standard PRM algorithm}, and a \vi-tree in Line \ref{prm:line:vi:tree}. 
+%The latter hierarchically partitions the workspace and is tasked with bridging a substantial gap between \tamp and \vistamp algorithms. While \tamp algorithms are given a target state $t$ as part of the input, the set of target states for \tvmp is implicitly defined by the set of target points $P_S$ and the parameters of the visibility device $\alpha$ and $h$. 
+The latter is capable of sampling configurations likely to be viable goal states from which the query point set $P_S$ is visible. %See Section \ref{sec:method:visibility:integrity:tree} for more details.
+
+
+
+Next, the algorithm connects the start configuration $s$ to $G$, choosing neighbors by some distance metric. \new{Our implementation utilizes Euclidean \cspace{} distance, though other distance metrics are also applicable.} The first attempt to find valid goal configurations follows immediately in Line \ref{prm:line:roadmap:coverage}, where the \fov{}s of configurations stored in $G$ are exhaustively tested. While this subproblem easily admits a geometric data structure, we found the time required to scan the roadmap nodes is far from being the algorithm's bottleneck, assuming that the \fov is saved at every graph node. If the roadmap or the connected component of $s$ do not yet contain a valid goal state, two steps are executed. The graph is extended with new configuration nodes (Line \ref{prm:line:roadmap:sample}), and goal configurations are sampled (Line \ref{prm:line:find:vis:neighborhood}) by lifting the output of \vi-tree queries to $SE(3)$ and applying \ik computations. The former is an attempt to find more connecting opportunities and merge existing connected components. The latter addresses the core \tvmp challenge of determining goal configurations from the target set.
+% While these configurations may be physically quite far from the set $P_S$, they are, in some sense, its visibility neighborhood in \cspace. 
+% Additionally, more samples are added to the roadmap in an attempt to merge existing connected components connect the start with a goal.
+% If one or both connection attempts fail, a  loop starts in which more configurations are sampled, and connections are once more attempted. 
+Once both $s$ and a member $t$ of the goal configuration set $X$ have been connected via $G$, an $(s,t)$-path is returned using any \new{Single Source Shortest Path (SSSP)} algorithm. \remove{by using any Single Source Shortest Path (SSSP) algorithm (e.g., A$^*$ or Dijkstra).}
+
+
+
+
+\subsection{Visibility-\rrt (\visrrt)}
+\label{sec:method:visrrt}
+
+Algorithm \ref{alg:vis:rrt} contains the pseudocode of \visrrt, a modified \rrt algorithm for instances of single query \tvmp. The algorithm extends the tree in a normal \rrt manner, finding the nearest neighbor based on Euclidean \cspace{} distance and maintaining the crucial Voronoi bias (Line \ref{rrt:line:extend}). While standard \rrt often biases the search by sampling the goal configuration in a fraction of iterations, this approach is inapplicable to \visrrt as no explicit goal configuration is available. Moreover, integrating the \vi-tree used by \visprm would introduce a heavy pre-processing phase to an otherwise agile algorithm, a cost that, unlike in the \visprm framework, cannot be amortized across multiple tasks.
+
+
+In the standard \rrt, if an endpoint of a successful extension is sufficiently close to the goal configuration, a connection toward that goal is attempted. Similarly, \visrrt employs a visibility heuristic as an oracle to identify promising nodes with a high probability of seeing the target. Upon identification, the \visik solver leverages the node to generate a feasible goal configuration toward which the tree can extend. Each time an extension operation results in the addition of a configuration $c'$ to the tree (Line \ref{rrt:line:extend}), the algorithm invokes $\fk(c')$ to compute the position $p$ of the visibility device, i.e., the apex of the \fov{} (Line \ref{rrt:line:fk}), and performs ray shooting queries to points of $P_S$ (Line \ref{rrt:line:is:close}). When the count of successful visibility queries exceeds a predefined threshold $n_{visibility}$, the algorithm invokes the \visik solver (Line \ref{rrt:line:vis:ik}) to derive a nearby goal configuration. Once found, a direct connection to this newly generated goal state is attempted (Line \ref{rrt:line:vis:extend_visik}). %This component is described in detail in Section \ref{sec:method:vis:ik}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}
+    \caption{Visibility-based \prm}%
+    \label{alg:vis:prm}
+    \SetAlgoLined%
+    \SetKwInOut{Input}{input}
+    \Input{$r, E, s, P_S$}
+    $G \gets \func{PRM}(r, E, n_{samples})$
+    \label{prm:line:c:space:prm}
+    \Comment{build roadmap for $r$ in $E$}\\
+    $T \gets \func{visibility\_integrity\_tree(E)}$
+    \label{prm:line:vi:tree}
+    \Comment{Alg. \ref{alg:vi:tree}} \\
+
+    $connected\_start\_cfg \gets \func{connect}(s,G)$\Comment{connect based on \cspace{} distance} \label{prm:line:connect} \\
+    $X \gets \emptyset$  \Comment{initializing set of targets}\\
+    $connected\_goal\_cfg \gets \False$\\
+    \ForEach{$c \in G$ \label{prm:line:roadmap:coverage}}{
+        \If{$P_S \subseteq \visatcfg{c}$}{
+            $connected\_goal\_cfg \gets G.\func{is\_connected(s,c)}$\\
+            $X.\func{insert}(c)$\\    
+        }
+    }
+    \While{(\Not $connected\_goal\_cfg$ ) \Or (\Not $connected\_start\_cfg$)}{
+        $H \gets \func{sample\_c\_space}(r, E, n_{batch})$ \label{prm:line:roadmap:sample}\Comment{sample new configurations}\\
+        $\func{connect}(H,G)$ \newComment{same as Line \ref{prm:line:connect} for the set $H$}\\
+        \If{\Not $connected\_start\_cfg$}{
+            $connected\_start\_cfg \gets\func{connect}(s,G)$\\
+        }
+        $N_t^{\R^3} \gets T.\func{sample\_goal\_positions}(P_S)$\newComment{use \vi-tree to sample from $E$. See Sec. \ref{par:vi:tree:query}}\label{prm:line:find:vis:neighborhood} \\
+        $N_t^{SE(3)}\gets \func{points\_to\_poses}(N_t^{\R^3}, P_S)$
+        \Comment{lift samples to full 6\dof poses} \\     
+        $X.\func{insert}(\funcik(N_t))$ 
+        \Comment{store goal configurations}\\
+        $connected\_goal\_cfg \gets G.\func{is\_connected}(s, X)$\\    
+    }
+    $\Return$ $\func{SSSP}(G,s,X)$ \newComment{find shortest path to a goal}
+\end{algorithm}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+\paragraph*{\textbf{A note on probabilistic completeness}} 
+\new{Let $\mathcal{A} \subseteq \mathcal{C}_{\text{space}}$ denote the subset of configurations in \cspace{} that successfully observe the target. If $\mathcal{A}$ has a non-zero measure and is reachable from $s$ via paths with minimum clearance $\delta > 0$, then both proposed algorithms are probabilistically complete, %Consequently, the baseline methods described in Section \ref{sec:experiments} likewise inherit probabilistic completeness 
+as a direct corollary of Theorem 1 in \cite{kslbh-pcrrtgkpfp-19}.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{algorithm}[b]
+    \caption{Visibility-based \rrt}%
+    \label{alg:vis:rrt}
+    \SetAlgoLined%
+    \SetKwInOut{Input}{input}
+    \Input{$r, E, s, P_S$}
+    $T \gets ({s}, \emptyset$) \Comment{initializing an empty tree}\\
+    % $C \gets \func{visibility\_integrity\_clustering(E)}$\Comment{see Algorithm \ref{alg:vis:tree}} \\
+    $found\_goal\_cfg \gets \False$\\
+    % $iter \gets 0$ \Comment{iteration counter for goal sampling}\\
+    \While{\Not $found\_goal\_cfg$}{
+        $c\gets \func{sample\_c\_space}(r, E)$ \label{rrt:line:sample:c:space} \newComment{random sampling}\\
+        $c' \gets \func{extend}(T, c)$ \Comment{standard \rrt extension}
+        \label{rrt:line:extend}\\
+        % \tcp{\color{OliveGreen}\# sampling the goal 1\% of the time}
+        % \If{$iter \mod 100 = 0$}{
+        %     $p\gets \func{sample\_workspace}(E,C)$\\
+        %     $sees\_target \gets \func{visibility}(p, P_S)$
+        %     \Comment{checks if $P_S$ is visible from $p$}\label{rrt:line:is:visible}\\
+        %     \If{sees\_target}{
+        %         $t \gets \funcik{}(p)$\\
+        %         \If{$\func{is\_valid}(t)$}{
+        %              $\func{extend}(T, t)$
+        %         }
+        %     }
+        % }
+        % \tcp{\color{OliveGreen}\# replacement for metric check - if visibility is likely try ''looking towards'' target}
+        % \Else{
+            $p \gets \funcfk{}(c')$ \newComment{forward kinemtaics computation} 
+            \label{rrt:line:fk}\\
+            $is\_close \gets \left(\func{visibility}(p, P_S)  > n_{visibility}\right)$\Comment{Check if the target is visible from the end-effector position sample} \label{rrt:line:is:close}\\
+            \If{$is\_close$}{
+                $t \gets \funcvisik{}(c', P_S)$\Comment{finds a configuration close to $c'$ that sees $P_S$}\label{rrt:line:vis:ik}\\
+                $\func{extend}(T, t)$\label{rrt:line:vis:extend_visik}\\
+            }
+        % }
+    }
+    $\Return$ \new{$\func{SSSP}(T,s,t)$}
+\end{algorithm}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% If the \cspace{} set $A \subseteq \mathcal{C}_{space}$ of valid targets reachable from $s$ \new{by paths with some fixed minimum clearance $\delta$} has non-zero measure and new samples are tested for membership in $A$, both algorithms above are probabilistically complete. The benchmark methods, described in Section \ref{sec:experiments}, where membership in $A$ is explicitly tested are thus probabilistically complete. \new{This is a simple corollary of Thm. 1 in \cite{kslbh-pcrrtgkpfp-19}}. 
+

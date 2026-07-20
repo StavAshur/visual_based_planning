@@ -1,0 +1,251 @@
+PROJECT MAP
+===========
+Last updated: 2026-07-20
+
+PURPOSE OF THIS FILE
+--------------------
+Per core_instructions.txt (item 5), this map records the role, significance,
+and contents of every file in the project. It should be kept up to date and
+consulted first when deciding where to look for information.
+
+
+PROJECT OVERVIEW
+----------------
+The project develops Task and Motion Planning (TAMP) algorithms for missions
+that require a visibility-based device with a field-of-view (FoV) -- e.g., a
+flashlight or camera -- rather than physical contact with a target. Target
+platform: Ubuntu 18.04, ROS Melodic, a Husky mobile base carrying a UR5 arm
+with a flashlight (conic FoV) as the visibility device.
+
+The material falls into three groups:
+
+  (A) A research paper (LaTeX) on Target Visibility Motion Planning (TVMP),
+      a single-target-set visibility planning problem solved with two new
+      sampling-based planners, VisPRM and VisRRT. This is the completed /
+      in-progress write-up.
+
+  (B) Design and planning notes (plain text) for the next step: Visibility TSP
+      (VisTSP), which extends single-goal TVMP to visiting/observing many
+      targets with the mobile manipulator. These describe the intended
+      problem decomposition, frameworks, and code components still to build.
+
+  (C) The code repository -- the implementation of the VisTSP plan. This lives
+      in the project's Git repo (on the local machine / under version control)
+      and is NOT mirrored into this chat's read-only project view, so its
+      contents are documented here only as a placeholder to be filled in.
+      See "THE CODE REPOSITORY" below.
+
+
+GOVERNANCE / META FILES
+-----------------------
+core_instructions.txt
+  Role: Top-level standing instructions for the whole project. Do NOT edit
+    (item 4).
+  Significance: Defines project goal, hardware/software stack, and process
+    rules -- including the requirement to maintain this map (item 5) and to
+    document code in detail (item 6).
+  Contents: 6 numbered items -- (1) project goal (visibility-based TAMP),
+    (2) platform (Ubuntu 18.04 / ROS Melodic / Husky + UR5 + flashlight),
+    (3) pointer to global_plan.txt, (4) do-not-edit rule for this file and
+    global_plan.txt, (5) create/maintain project_map.txt, (6) require detailed
+    code documentation.
+
+global_plan.txt
+  Role: The project's global plan, named in core_instructions.txt (items 3 & 4).
+    Do NOT edit (item 4).
+  Significance: Authoritative statement of the current implementation direction
+    and the ordered task list for building VisTSP. Ties the Group B design notes
+    to concrete, sequenced work items.
+  Contents: States the current plan -- implement an algorithm for the visibility
+    travelling-salesman problem (VisTSP), where the task is to search / illuminate
+    / film a set of targets -- followed by a 6-step ordered task list:
+      1. Write the multi-target query for the VI-tree.
+      2. Implement Local VisRRG.
+      3. Implement the "Greek TSP" algorithm.
+      4. Implement LocalVisTSP.
+      5. Implement the covering algorithm (covering regions with copies of the
+         robot's reachable volume).
+      6. Implement a TSP algorithm for the 2D (mobile-base) locations.
+    Steps 1-4 build the LOCAL pipeline (multi-target VI-tree query -> Local
+    VisRRG -> Greek-style TSP shortcutting -> LocalVisTSP); steps 5-6 build the
+    GLOBAL pipeline (base-location coverage -> 2D tour). Together they trace the
+    GLVisTSP framework end to end (see VisTSP_frameworks.txt) and correspond
+    one-to-one with the backlog in VisTSP_missing_components.txt.
+
+
+THE PAPER (LaTeX sections) -- Group A: TVMP
+-------------------------------------------
+These are sections of a single paper. Recurring macros seen across them:
+\tamp, \vistamp (visibility-based TAMP), \tvmp (Target Visibility Motion
+Planning), \sbmp (sampling-based motion planning), \prm, \rrt, \visprm,
+\visrrt, \vi (Visibility Integrity), \fov, \cspace, \ik/\fk, \aabb.
+
+1_introduction.tex
+  Role: Introduction (\label{sec:intro}).
+  Significance: Motivates visibility-based TAMP, frames the gap (planners built
+    for short-range tools handle the elongated non-compact 3D FoV poorly),
+    and states the paper's three contributions.
+  Contents: Motivation and applications (tracking, exploration, search-and-
+    rescue, UV disinfection); why distance heuristics fail for FoV devices;
+    formalization of TVMP; three contributions -- (1) the Visibility Integrity
+    (VI) tree data structure, (2) VisPRM and VisRRT planners, (3) simulated +
+    real-world evaluation (flashlight on a robot). Figure fig:tvmp. Mentions
+    open-source planner code (link redacted for anonymity).
+
+2_Related_work.tex
+  Role: Related work (\label{sec:related:work}).
+  Significance: Positions TVMP against prior visibility and SBMP literature and
+    identifies which prior methods can/cannot serve as benchmarks.
+  Contents: Four themed paragraphs -- planar visibility task planning; spatial
+    visibility task planning (incl. Visibility Roadmap / VIR, UV-disinfection
+    PRM used as a baseline, RRT* variants); other spatial visibility tasks
+    (visual servoing / visual tracking -- local, so unsuitable as benchmarks);
+    and sampling-based motion planning background (PRM, RRT and variants).
+
+3_Preliminaries.tex
+  Role: Preliminaries (\label{sec:preliminaries}).
+  Significance: Formal definitions and assumptions the method relies on; defines
+    the VI measure central to the VI-tree.
+  Contents: Formal TVMP problem definition (robot r with conic FoV C, workspace
+    E, target set P, start s -> reach terminal config t with P inside FoV);
+    the alpha-TVMP variant; simplifying assumptions (target set approximated by
+    its minimum enclosing sphere P_S; environment approximated by AABBs/spheres/
+    meshes for GPU batching); and the Visibility Integrity (VI) definition as an
+    intersection-over-union of visibility sets. Figures fig:vi:example.
+  Note: Commented-out FK/IK definitions live here; the active FK/IK discussion
+    is in 4_Method.tex.
+
+4_Method.tex
+  Role: Method (\label{sec:method}). Largest and most detailed section.
+  Significance: Core algorithmic contribution -- the components and full
+    pseudocode for VisPRM and VisRRT, plus a probabilistic-completeness note.
+  Contents:
+    - Adjustments to SBMP (sec:method:adjusments): why TVMP has no explicit goal
+      config, motivating two components.
+    - VI-tree (sec:method:visibility:integrity:tree): recursive AABB partition
+      by outward-VI score; bottom-up visibility-list propagation.
+      Algorithms: Alg. vi:tree (construction), Alg. vi:tree:recursive (recursive
+      build), Alg. vi:tree:query (recursive query returning node->visible-volume
+      map). Figure fig:svi:leaves.
+    - Visibility IK / VisIK (sec:method:vis:ik): an IK map from target set to a
+      config that sees P_S, using a seed config g; searches a feasible segment
+      toward P_S center, intersects with reachable volume, discretizes, lifts to
+      SE(3), runs a standard IK solver, returns nearest-valid config to the seed.
+      (A VisIK pseudocode block exists but is currently \remove'd.)
+    - VisPRM (sec:method:visprm): Alg. vis:prm -- builds C-space roadmap + VI-tree,
+      connects start, scans roadmap FoVs for goals, samples goal positions via
+      VI-tree queries, lifts to poses + IK, returns SSSP path.
+    - VisRRT (sec:method:visrrt): Alg. vis:rrt -- standard RRT extension with a
+      visibility oracle; when a new node sees enough of P_S, VisIK generates a
+      goal to extend toward.
+    - Probabilistic completeness note: both planners are probabilistically
+      complete under a non-zero-measure, reachable-with-clearance goal set
+      (corollary of a cited RRT completeness theorem).
+  Cross-refs forward to a sec:experiments and sec:conclusion (sections not
+    present as separate files in the current directory).
+
+
+VisTSP DESIGN / PLANNING NOTES -- Group B: next-stage work
+----------------------------------------------------------
+These plain-text files scope the Visibility TSP extension: observing MANY
+targets with the mobile manipulator, layering a global (mobile-base) and local
+(arm) structure on top of the TVMP building blocks from the paper.
+
+VisTSP_problem.txt
+  Role: Problem statement for Visibility TSP and its subproblems.
+  Significance: The authoritative definition of what VisTSP is trying to solve;
+    anchor for the frameworks and missing-components files.
+  Contents: VisTSP defined as finding a motion plan whose swept FoV covers a
+    target set P. Four subproblems: (1) find regions so each target is seen by
+    >= k regions (via VI-tree multi-target query + pruning); (2) find 2D floor
+    locations for the mobile base whose workspace spheres cover the regions
+    (with optional beta coverage fraction); (3) local plan to see a location's
+    targets while the base stays within delta of the location; (4) global plan
+    routing the base through a subset of locations covering all targets.
+
+VisTSP_missing_components.txt
+  Role: Backlog of code/algorithm components still needed to realize VisTSP.
+  Significance: The practical to-build list bridging the paper's code and the
+    VisTSP frameworks. Maps directly onto the 6 steps of global_plan.txt.
+  Contents: (1) VI-tree multi-target query with coverage parameters (vector of
+    target spheres, beta fraction, returns region->targets map); (2) region-
+    pruning algorithm (keep every target covered by >= k regions while shrinking
+    the region set); (3) set-cover of workspace regions by reachable-volume
+    copies; (4) local TSP (mostly 3D, base ~fixed); (5) global TSP (mostly 2D,
+    arm ~irrelevant).
+
+VisTSP_frameworks.txt
+  Role: Candidate end-to-end frameworks for VisTSP.
+  Significance: Two proposed pipelines -- one primary, one benchmark.
+  Contents:
+    - GLVisTSP (Global/Local Visibility TSP) [preferred]: compute regions ->
+      pick base locations covering them -> global TSP over locations -> per-
+      location local VisTSP -> execute global tour with local tours at each stop.
+      This is the pipeline the global_plan.txt task order builds.
+    - VisCfgTSP (Visibility Configurations TSP) [benchmark]: compute configs so
+      each target watched by >= K configs -> TSP visiting one watching-config
+      per target.
+
+local_VisTSP.txt
+  Role: Detailed sketch of the LOCAL VisTSP algorithm (subproblem 3 / LTSP).
+  Significance: Fills in the "local plan" stage used inside GLVisTSP; expands
+    global_plan.txt steps 2-4.
+  Contents:
+    - Local VisRRG(r, E, B, T, k): build a local roadmap by sampling the VI-tree
+      for target configs, connecting them, and extending toward targets seen
+      fewer than k times using visibility checks + VisIK, within local bounding
+      box B.
+    - "TSP Greek Alg": MST -> post-order traversal -> shortcut with a local
+      planner, falling back to RRT/VisRRT when a shortcut is hard to find (the
+      noted interesting case).
+    - LocalVisTSP: run Local VisRRG to get graph G, then GreekTSP(G).
+
+
+THE CODE REPOSITORY -- Group C: implementation
+----------------------------------------------
+[NOT PRESENT IN THIS CHAT'S PROJECT VIEW -- fill in from the Git repo.]
+
+  Role: The implementation of the VisTSP global plan -- the ROS/C++/Python code
+    realizing the VI-tree, VisIK, VisPRM/VisRRT, and the VisTSP pipeline
+    components enumerated in global_plan.txt and VisTSP_missing_components.txt.
+  Significance: Where the algorithms above actually get built, run on the Husky +
+    UR5 platform, and evaluated. Detailed code documentation is required
+    (core_instructions.txt item 6).
+  Contents: UNKNOWN from this chat -- the repository is under version control on
+    the local machine and is not mirrored into the read-only project view here,
+    so its file tree could not be inspected when this entry was written.
+    TO DOCUMENT (ideally via Claude Code, which can read the repo directly):
+      - Top-level layout (ROS package(s), src/, scripts/, launch/, config/,
+        tests/, etc.).
+      - For each significant module/file: its role, which global_plan.txt step
+        or VisTSP_missing_components.txt item it implements, key
+        classes/functions, and dependencies.
+      - Build / run instructions and platform assumptions (Ubuntu 18.04,
+        ROS Melodic).
+      - Mapping between code artifacts and the paper's algorithms (VI-tree,
+        VisIK, VisPRM, VisRRT) and the VisTSP components.
+
+
+HOW THE PIECES RELATE
+---------------------
+The paper (Group A) delivers the primitives: the VI measure, the VI-tree (with
+construction and query), VisIK, and the VisPRM/VisRRT planners for single-goal
+TVMP. The VisTSP notes (Group B) reuse those primitives -- especially the VI-tree
+query and VisIK -- to build multi-target coverage: regions from the VI-tree, base
+locations covering those regions, a global tour over locations, and local
+visibility tours (Local VisRRG + Greek-style TSP shortcutting) at each stop.
+The global plan (global_plan.txt) sequences this into 6 build steps, and the code
+repository (Group C) is where those steps are implemented and evaluated on the
+Husky + UR5 platform.
+
+
+MAINTENANCE NOTES
+-----------------
+- Update this map whenever files are added, removed, or substantially changed
+  (core_instructions.txt item 5).
+- Fill in the "THE CODE REPOSITORY" section with the repo's actual file tree and
+  per-file descriptions. This is best done from an environment with direct access
+  to the repository (e.g., Claude Code), since the repo is not visible in this
+  chat's read-only project view.
+- The paper references sec:experiments and sec:conclusion; add entries if/when
+  those sections appear as files.

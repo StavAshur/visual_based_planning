@@ -1,0 +1,16 @@
+Missing components:
+
+1. VI-tree multi-target query with coverage parameters: 
+A query to the VI-tree with a vector of target spheres as argument (as opposed of a single sphere currently implemented).
+For each target: Finds a set of regions containing the target, and a set of regions seeing at least a \beta-fraction of the target regions
+returns a dictionary (map) of regions and which targets they see.
+
+2. Region-pruning algorithm:
+Given the regions from the multi-target query and a parameter k, prune the regions so that every target is still covered by at least k regions.
+The goal is to reduce the size of the region set for computational efficiency of the next stages.
+
+3. Set cover algorithm covering workspace regions with reachable volumes copies.
+
+4. Local TSP (Mostly 3D where the robot's base doesn't move a lot)
+
+5. Global TSP (Mostly 2D where the robot's arm doesn't matter all that much)
