@@ -107,7 +107,6 @@ public:
         root_->id = node_counter++;
 
         buildTreeRecursive(root_.get(), workspace_bounds_, "0", node_counter, leaf_counter);
-        // ComputeTreeVisibility(root_.get());
         
         ComputeLeafPairwiseVisibility();
         ComputeParentVisibilityBottomUp(root_.get());
@@ -118,6 +117,13 @@ public:
 
     }
 
+
+
+/// ========================================================================================================
+/// ========================================================================================================
+/// ============================================== Queries =================================================
+/// ========================================================================================================
+/// ========================================================================================================
 
     /**
      * @brief Samples a point that can see the target 'ball' with high probability.
@@ -336,22 +342,21 @@ private:
     std::unique_ptr<VINode> root_;
     std::vector<VINode*> leaves_; 
 
-    // --- Bounding Box Helpers ---
 
-    Eigen::Vector3d getSize(const BoundingBox& b) {
-        return Eigen::Vector3d(
-            b.x_max - b.x_min,
-            b.y_max - b.y_min,
-            b.z_max - b.z_min
-        );
-    }
+
+/// ========================================================================================================
+/// ========================================================================================================
+/// ========================================= Tree construction ============================================
+/// ========================================================================================================
+/// ========================================================================================================
+
 
     
     bool buildTreeRecursive(VINode* node, const BoundingBox& env_bounds, const std::string& idx, int& node_counter, int& leaf_counter) {
         num_nodes_++;
         
         // Calculate size early for logging
-        Eigen::Vector3d box_size = getSize(node->box);
+        Eigen::Vector3d box_size = getBoxSize(node->box);
 
         // ROS_INFO("[Node %s] Processing ID: %d | Bounds: [%.2f, %.2f, %.2f]", 
         //         idx.c_str(), node_counter, box_size.x(), box_size.y(), box_size.z());
@@ -528,27 +533,7 @@ private:
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/**
+    /**
      * @brief Computes all-pairs visibility between leaf centers.
      * Updates 'visible_from_nodes' based on the sphere intersection constraints.
      */
@@ -602,7 +587,7 @@ private:
         }
     }
 
-/**
+    /**
      * @brief Bottom-Up Recursive Traversal.
      * Computes internal node visibility by intersecting children's lists.
      * Propagates parent visibility back to the 'seers'.
@@ -678,203 +663,12 @@ private:
 
 
 
+/// ========================================================================================================
+/// ========================================================================================================
+/// ========================================= Geometric helpers ============================================
+/// ========================================================================================================
+/// ========================================================================================================
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    /**
-     * @brief Recursively checks convexity and marks visibility computed.
-     * Call with root_.get() to start the traversal.
-     */
-    void ComputeTreeVisibility(VINode* node) {
-        if (!node) return;
-
-        // 1. Process current node if it meets convexity criteria
-        if (node->convexity_score > 0.99) {
-            ComputeVisibilityInSiblings(node);
-            node->visibility_computed = true;
-        }
-
-        // 2. Recursively traverse children
-        if (node->left) {
-            ComputeTreeVisibility(node->left.get());
-        }
-        if (node->right) {
-            ComputeTreeVisibility(node->right.get());
-        }
-    }
-
-    /**
-     * @brief Traverses the subtree rooted at 'root' to find nodes visible from 'v'.
-     * Uses BFS traversal and prunes branches based on visibility score.
-     */
-    void ComputeNodeVisibilityInSubtree(VINode* v, VINode* root) {
-        if (!v || !root) return;
-
-        std::queue<VINode*> q;
-        q.push(root);
-
-        int n_samples = vi_params_.num_samples;
-        
-        double sq_range = std::pow(vis_tool_params_.beam_length, 2);
-
-        while (!q.empty()) {
-            VINode* u = q.front();
-            q.pop();
-
-            // 1. Initial Checks: Workspace Intersection and distance
-            bool u_in_box = intersectsWorkspaceBox(u->box);
-            bool v_in_box = intersectsWorkspaceBox(v->box);
-
-            if (distSqBoxBox(u->box, v->box) > sq_range)
-                continue;
-
-            // Proceed only if u is convex enough AND at least one node is in the sphere
-            if (u->convexity_score > 0.99 && (u_in_box || v_in_box)) {
-                
-                // 2. Sample Points
-                std::vector<Eigen::Vector3d> S_u, S_v;
-                sampler_->sampleInBox(u->box, n_samples, S_u);
-                sampler_->sampleInBox(v->box, n_samples, S_v);
-
-                if (S_u.empty() || S_v.empty()) continue;
-
-                // 3. Compute Bi-Directional "Seen By All" Score using GPU
-                
-                // Combine samples: [S_u ... S_v]
-                std::vector<Eigen::Vector3d> combined = S_u;
-                combined.insert(combined.end(), S_v.begin(), S_v.end());
-
-                // Upload Matrix
-                vis_oracle_->precomputeGpuMatrix(combined);
-
-                // A. Count points in u that see all points in v
-                // Guards = S_v (indices from S_u.size() to end)
-                std::vector<int> guards_v(S_v.size());
-                std::iota(guards_v.begin(), guards_v.end(), (int)S_u.size());
-                
-                std::vector<bool> u_sees_all_v = vis_oracle_->checkSeenByAllGPU(guards_v);
-                
-                int count_u_seeing_all_v = 0;
-                for (size_t i = 0; i < S_u.size(); ++i) {
-                    if (u_sees_all_v[i]) count_u_seeing_all_v++;
-                }
-
-                // B. Count points in v that see all points in u
-                // Guards = S_u (indices from 0 to S_u.size()-1)
-                std::vector<int> guards_u(S_u.size());
-                std::iota(guards_u.begin(), guards_u.end(), 0);
-
-                std::vector<bool> v_sees_all_u = vis_oracle_->checkSeenByAllGPU(guards_u);
-
-                int count_v_seeing_all_u = 0;
-                for (size_t i = S_u.size(); i < combined.size(); ++i) {
-                    if (v_sees_all_u[i]) count_v_seeing_all_u++;
-                }
-
-                // 4. Calculate Score (Min of the two ratios)
-                double ratio_u = static_cast<double>(count_u_seeing_all_v) / S_u.size();
-                double ratio_v = static_cast<double>(count_v_seeing_all_u) / S_v.size();
-                double score = std::min(ratio_u, ratio_v);
-
-                // 5. Update and Recurse
-                if (score > 0.99) {
-                    
-                    // Update u's list if v is relevant (intersects sphere)
-                    if (v_in_box) {
-                        u->visible_from_nodes.push_back({v, score});
-                    }
-
-                    // Update v's list if u is relevant (intersects sphere)
-                    if (u_in_box) {
-                        v->visible_from_nodes.push_back({u, score});
-                    }
-
-
-                }
-                else {
-                    // "Recursively" call on children (BFS Enqueue)
-                    if (u->left) q.push(u->left.get());
-                    if (u->right) q.push(u->right.get());
-                }  
-            }
-        }
-    }
-
-
-    /**
-     * @brief Traverses ancestors of v. For each ancestor u, computes visibility between v
-     * and u's "other" child (the sibling of the path to v).
-     */
-    void ComputeVisibilityInSiblings(VINode* v) {
-        if (!v) return;
-
-        ROS_WARN("[ComputeTreeVisibility] computing visibility of node with id %d", v->id);
-
-        // 'ancestor_child' tracks the node on the path to v that is a child of u
-        VINode* ancestor_child = v;
-        VINode* u = v->parent;
-
-        while (u != nullptr) {
-            // Determine the sibling: The child of u that is NOT ancestor_child
-            VINode* sibling = nullptr;
-            if (u->left.get() == ancestor_child) {
-                sibling = u->right.get();
-            } else {
-                sibling = u->left.get();
-            }
-
-            // Process only if sibling exists and its visibility hasn't been finalized
-            if (sibling && !sibling->visibility_computed) {
-                ComputeNodeVisibilityInSubtree(v, sibling);
-            }
-
-            // Traverse up towards the root
-            ancestor_child = u;
-            u = u->parent;
-        }
-    }
 
 
 
@@ -924,7 +718,6 @@ private:
 
 
 
-    // --- Geometric Helpers for Ball Query ---
 
     // Squared distance from a point to the closest point on a box
     double distSqPointBox(const Eigen::Vector3d& p, const BoundingBox& b) {
@@ -975,7 +768,14 @@ private:
     }
 
 
-    // --- Volume Helpers ---
+    Eigen::Vector3d getBoxSize(const BoundingBox& b) {
+        return Eigen::Vector3d(
+            b.x_max - b.x_min,
+            b.y_max - b.y_min,
+            b.z_max - b.z_min
+        );
+    }
+
 
     double getBoxVolume(const BoundingBox& b) {
         return (b.x_max - b.x_min) * (b.y_max - b.y_min) * (b.z_max - b.z_min);

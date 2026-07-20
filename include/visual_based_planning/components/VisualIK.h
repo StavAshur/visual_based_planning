@@ -91,75 +91,10 @@ public:
         Eigen::Vector3d b = c - (r / std::tan(theta)) * v;
         double seg_length = (b - a).norm();
 
-        ROS_INFO("Before intersection: h=%f, theta=%f \n Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
-                h, theta,
-                a.x(), a.y(), a.z(),
-                b.x(), b.y(), b.z());
-
-        // // Intersecting the segment with the reachable volume of the robot
-        // // Which is a sphere with center (0.33, 0.0, 0.33) - the arm base,
-        // // radius 1.2 which is the arm length, and above z=0 which is the floor
-        // // Define Ball parameters
-        // Eigen::Vector3d ball_center(0.33, 0.0, 0.33);
-        // // Eigen::Vector3d ball_center(0.0, 0.0, 0.0);
-        // double ball_radius = 1.2;
-
-        // // Vector logic: P(t) = a + t * u, for t in [0, 1]
-        // Eigen::Vector3d u = b - a;
-        // Eigen::Vector3d f = a - ball_center;
-
-        // // Coefficients for the quadratic equation At^2 + Bt + C <= 0
-        // double A = u.squaredNorm();
-        // double B = 2.0 * f.dot(u);
-        // double C = f.squaredNorm() - ball_radius * ball_radius;
-        // double delta = B * B - 4.0 * A * C;
-
-        // // If delta < 0, the infinite line does not intersect the sphere
-        // if (delta < 0) return false;
-
-        // // Calculate intersection t-values
-        // double t1 = (-B - std::sqrt(delta)) / (2.0 * A);
-        // double t2 = (-B + std::sqrt(delta)) / (2.0 * A);
-
-        // // Clamp the t-values to the segment range [0, 1]
-        // // We assume t1 < t2 because A is positive
-        // double t_start = std::max(0.0, t1);
-        // double t_end   = std::min(1.0, t2);
-
-        // // If the valid interval is effectively empty or length is 0
-        // if (t_start >= t_end) return false;
-
-        // // Update points a and b to the intersection bounds
-        // // Store original 'a' to ensure 'b' is calculated correctly
-        // Eigen::Vector3d a_orig = a;
-        // a = a_orig + t_start * u;
-        // b = a_orig + t_end * u;
-
-
-        // ROS_INFO("After intersection: h=%f, theta=%f \n Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
+        // ROS_INFO("Before intersection: h=%f, theta=%f \n Segment is a=(%f,%f,%f) b=(%f,%f,%f)",
         //         h, theta,
         //         a.x(), a.y(), a.z(),
         //         b.x(), b.y(), b.z());
-
-
-        // // --- Intersection with Half-Space Z >= 0 (Floor) ---
-        
-        // // 1. If both points are below the floor, the intersection is empty
-        // if (a.z() < 0 && b.z() < 0) return false;
-
-        // // 2. If the segment crosses the floor, clip the point below it
-        // if (a.z() < 0 || b.z() < 0) {
-        //     // Solve for t where P(t).z = 0
-        //     // P(t) = a + t * (b - a)  =>  0 = a.z + t * (b.z - a.z)
-        //     double t_floor = -a.z() / (b.z() - a.z());
-            
-        //     // Calculate the intersection point on the floor
-        //     Eigen::Vector3d p_floor = a + t_floor * (b - a);
-
-        //     // Replace the point that is below the floor with the intersection point
-        //     if (a.z() < 0) a = p_floor;
-        //     else           b = p_floor;
-        // }
 
 
         // Define AABB parameters
