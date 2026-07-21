@@ -152,18 +152,30 @@ public:
         std::uniform_int_distribution<> dist_idx(0, seers.size() - 1);
         std::uniform_real_distribution<double> dist_prob(0.0, 1.0);
 
+        // The scores returned by query() are fractions of the ball in [0, 1], and
+        // are typically far below 1 (a seer rarely covers the whole target). Using
+        // them directly as acceptance probabilities would reject almost everything,
+        // so rescale by the best score: this preserves the relative ranking of the
+        // seers -- all rejection sampling needs here -- while keeping the acceptance
+        // rate of the top candidate at 1.
+        double max_score = 0.0;
+        for (const auto& seer_pair : seers) {
+            max_score = std::max(max_score, seer_pair.second);
+        }
+        if (max_score <= 1e-9) return false; // No seer covers a meaningful part of the ball
+
         for (int i = 0; i < max_attempts; ++i) {
             // A. Pick a random candidate node from the list
             int rand_idx = dist_idx(rng_);
             const auto& candidate_pair = seers[rand_idx];
-            
+
             VINode* seer_node = candidate_pair.first;
-            double intersection_volume = candidate_pair.second;
+            double relative_score = candidate_pair.second / max_score;
 
             // B. Rejection Sampling: Reject with probability (1 - score)
             // (i.e., Accept if random value < score)
-            if (dist_prob(rng_) > intersection_volume) {
-                continue; 
+            if (dist_prob(rng_) > relative_score) {
+                continue;
             }
 
             // C. Sample a point from the seer's bounding box
@@ -244,10 +256,16 @@ public:
     }
 
 /**
-     * @brief Populates 'out_seeing_nodes' with (Seer, IntersectionVolume) pairs.
-     * Traverses the tree to find nodes intersecting the ball.
-     * - If fully contained: IntersectionVolume = Box Volume.
-     * - If leaf (partial intersection): IntersectionVolume = Approx Sampled Volume.
+     * @brief Populates 'out_seeing_nodes' with (Seer, BallFraction) pairs.
+     *
+     * Traverses the tree collecting the nodes that cover the ball: those fully
+     * contained in it (recursion stops there) and the leaves that intersect it
+     * partially. This cover is disjoint, so each seer's fractions can be summed.
+     *
+     * Every covering node contributes getBallFraction(node->box, ball) -- the
+     * fraction of the ball's volume it accounts for -- to each node that sees it.
+     * The accumulated score per seer is therefore a dimensionless value in [0, 1]:
+     * the fraction of the target ball visible from that seer.
      */
     void query(const Ball& ball, std::vector<std::pair<VINode*, double>>& out_seeing_nodes) {
         out_seeing_nodes.clear();
@@ -276,35 +294,31 @@ public:
             // else ROS_INFO("   -> Status: Partial Intersection (Internal).");
             // 2. Process "Relevant" Nodes (Fully Contained OR Leaves)
             if (fully_contained || node->is_leaf) {
-                double intersection_volume = 0.0;
+                // Fraction of the ball covered by this node. getBallFraction
+                // handles the fully-contained and the partial case alike, so both
+                // branches yield comparable, dimensionless values.
+                double ball_fraction = getBallFraction(node->box, ball);
 
-                if (fully_contained) {
-                    intersection_volume = getBoxVolume(node->box);
-                } else {
-                    // Leaf with partial intersection
-                    intersection_volume = getApproxIntersectionVolume(node->box, ball);
-                }
-
-                // If the volume is non-negligible, process visibility
-                if (intersection_volume > 1e-9) {
-                    // ROS_INFO("   -> Processing %lu seers from this node (Vol: %.4f):", 
-                    //          node->visible_from_nodes.size(), intersection_volume);
+                // If the fraction is non-negligible, process visibility
+                if (ball_fraction > 1e-9) {
+                    // ROS_INFO("   -> Processing %lu seers from this node (Frac: %.4f):",
+                    //          node->visible_from_nodes.size(), ball_fraction);
                     // Iterate over 'visible_from_nodes' (which stores pairs <VINode*, double>)
-                    // We extract the pointer 'u_ptr' and pair it with the computed volume.
+                    // We extract the pointer 'u_ptr' and pair it with the computed fraction.
                     for (const auto& seer_pair : node->visible_from_nodes) {
                         VINode* u = seer_pair.first;
 
                         bool found = false;
                         for (auto& existing_pair : out_seeing_nodes) {
                             if (existing_pair.first == u) {
-                                existing_pair.second += intersection_volume;
+                                existing_pair.second += ball_fraction;
                                 found = true;
                                 break;
                             }
                         }
 
                         if (!found) {
-                            out_seeing_nodes.push_back({u, intersection_volume});
+                            out_seeing_nodes.push_back({u, ball_fraction});
                         // ROS_INFO("      + Added Seer ID: %d", u->id);
                         }
                     }
@@ -781,38 +795,59 @@ private:
         return (b.x_max - b.x_min) * (b.y_max - b.y_min) * (b.z_max - b.z_min);
     }
 
-    double getApproxIntersectionVolume(const BoundingBox& b, const Ball& ball) {
-        double box_vol = getBoxVolume(b);
+    double getBallVolume(const Ball& ball) {
+        return (4.0 / 3.0) * M_PI * ball.radius * ball.radius * ball.radius;
+    }
 
-        double r_sq = ball.radius * ball.radius;
-
-        double sphere_vol = r_sq * M_PI;
+    /**
+     * @brief Volume of the intersection (box n ball).
+     *
+     * Exact when the box lies entirely inside the ball (the intersection is then
+     * the box itself); estimated by Monte-Carlo sampling of the box otherwise.
+     *
+     * @return Volume in the same units as the box, i.e. m^3.
+     */
+    double getIntersectionVolume(const BoundingBox& b, const Ball& ball) {
+        const double box_vol = getBoxVolume(b);
         if (box_vol <= 1e-9) return 0.0;
 
-        int samples = 1000;
+        // Full containment => box n ball == box, no sampling needed.
+        if (isBoxFullyInBall(b, ball)) return box_vol;
+
+        const double r_sq = ball.radius * ball.radius;
+
+        const int samples = 1000;
         int inside_count = 0;
-        
+
         // Use local distributions to sample inside this specific box
         std::uniform_real_distribution<double> x_d(b.x_min, b.x_max);
         std::uniform_real_distribution<double> y_d(b.y_min, b.y_max);
         std::uniform_real_distribution<double> z_d(b.z_min, b.z_max);
 
-
-        for(int i=0; i<samples; ++i) {
-            double px = x_d(rng_);
-            double py = y_d(rng_);
-            double pz = z_d(rng_);
-
-            double dx = px - ball.center.x();
-            double dy = py - ball.center.y();
-            double dz = pz - ball.center.z();
+        for (int i = 0; i < samples; ++i) {
+            const double dx = x_d(rng_) - ball.center.x();
+            const double dy = y_d(rng_) - ball.center.y();
+            const double dz = z_d(rng_) - ball.center.z();
 
             if (dx*dx + dy*dy + dz*dz <= r_sq) {
                 inside_count++;
             }
         }
 
-        return box_vol * (static_cast<double>(inside_count) / samples) / sphere_vol;
+        return box_vol * (static_cast<double>(inside_count) / samples);
+    }
+
+    /**
+     * @brief Fraction of the ball's volume accounted for by the box.
+     *
+     * This is the single normalization point for ball-vs-box overlap: both the
+     * fully-contained and the partially-intersecting case go through it, so the
+     * value is always comparable across nodes and across targets.
+     *
+     * @return Dimensionless fraction in [0, 1].
+     */
+    double getBallFraction(const BoundingBox& b, const Ball& ball) {
+        return getIntersectionVolume(b, ball) / getBallVolume(ball);
     }
 
     // Helper map for ID lookup

@@ -1,251 +1,747 @@
 PROJECT MAP
 ===========
-Last updated: 2026-07-20
+Last updated: 2026-07-20 (rewritten from Claude Code with direct repo access)
 
 PURPOSE OF THIS FILE
 --------------------
-Per core_instructions.txt (item 5), this map records the role, significance,
-and contents of every file in the project. It should be kept up to date and
-consulted first when deciding where to look for information.
+Per CLAUDE.md item 5, this map records the role, significance, and contents of
+every file in the project. It should be kept up to date and consulted first when
+deciding where to look for information.
+
+NOTE ON THE PREVIOUS VERSION: the earlier map was written from the Claude chat's
+read-only project view, which contained only claude_context/ and could not see
+the repository. It referred to the standing instructions as
+"core_instructions.txt"; the actual file is CLAUDE.md at the repo root. It also
+listed the code repository as "NOT PRESENT / UNKNOWN". Both are fixed below.
 
 
 PROJECT OVERVIEW
 ----------------
-The project develops Task and Motion Planning (TAMP) algorithms for missions
-that require a visibility-based device with a field-of-view (FoV) -- e.g., a
-flashlight or camera -- rather than physical contact with a target. Target
-platform: Ubuntu 18.04, ROS Melodic, a Husky mobile base carrying a UR5 arm
-with a flashlight (conic FoV) as the visibility device.
+Task and Motion Planning (TAMP) for missions requiring a visibility-based device
+with a field-of-view (FoV) -- a flashlight or camera -- rather than physical
+contact with a target. Target platform: Ubuntu 18.04, ROS Melodic, a Husky
+mobile base carrying a UR5 arm with a flashlight (conic FoV).
 
 The material falls into three groups:
 
-  (A) A research paper (LaTeX) on Target Visibility Motion Planning (TVMP),
-      a single-target-set visibility planning problem solved with two new
-      sampling-based planners, VisPRM and VisRRT. This is the completed /
-      in-progress write-up.
+  (A) The research paper (LaTeX, in claude_context/) on Target Visibility Motion
+      Planning (TVMP): the single-target-set problem solved by two new
+      sampling-based planners, VisPRM and VisRRT. Being revised for RA-L.
 
-  (B) Design and planning notes (plain text) for the next step: Visibility TSP
-      (VisTSP), which extends single-goal TVMP to visiting/observing many
-      targets with the mobile manipulator. These describe the intended
-      problem decomposition, frameworks, and code components still to build.
+  (B) Design notes (plain text, in claude_context/) for the next stage,
+      Visibility TSP (VisTSP): observing MANY targets with the mobile
+      manipulator.
 
-  (C) The code repository -- the implementation of the VisTSP plan. This lives
-      in the project's Git repo (on the local machine / under version control)
-      and is NOT mirrored into this chat's read-only project view, so its
-      contents are documented here only as a placeholder to be filled in.
-      See "THE CODE REPOSITORY" below.
+  (C) The ROS package -- this repository. It implements Group A (the TVMP paper:
+      VI-tree, VisIK, VisPRM, VisRRT, plus the VIR baseline) and its experiment
+      harness. NONE of the Group B / global_plan.txt VisTSP components exist yet;
+      see "VisTSP BACKLOG vs. CODE" at the end.
+
+CURRENT STATE IN ONE LINE: the paper's planners are implemented, evaluated, and
+running on hardware; the VisTSP extension has not been started in code.
 
 
-GOVERNANCE / META FILES
------------------------
-core_instructions.txt
-  Role: Top-level standing instructions for the whole project. Do NOT edit
-    (item 4).
-  Significance: Defines project goal, hardware/software stack, and process
-    rules -- including the requirement to maintain this map (item 5) and to
-    document code in detail (item 6).
+==============================================================================
+PART 1 -- THE CODE REPOSITORY (ROS package `visual_based_planning`)
+==============================================================================
+
+Repository root: ~/catkin_ws/src/visual_based_planning
+Language/stack: C++14 (header-dominant), CUDA, catkin, MoveIt (Melodic),
+Boost.Geometry + Boost.Graph, Eigen, nanoflann, yaml-cpp.
+
+ARCHITECTURAL SHAPE -- read this before diving into files
+---------------------------------------------------------
+The package is almost entirely HEADER-ONLY. Every algorithm lives in a .h under
+include/visual_based_planning/; src/visual_planner.cpp is a 3-line placeholder
+that exists only so CMake has a library target. Consequence: when looking for an
+implementation, look in include/, not src/. src/ holds only ROS nodes (executables)
+and the CUDA kernels.
+
+Runtime topology:
+    visual_planning_node  (ROS service server "plan_visibility_path")
+        owns -> VisualPlanner
+                  |-- ValidityChecker  (MoveIt collision + interpolation)
+                  |-- VisualIK         (visibility-aware IK, MoveIt setFromIK)
+                  |-- Sampler          (C-space + workspace sampling)
+                  |-- PathSmoother     (shortcutting)
+                  |-- VisibilityOracle (FoV/occlusion queries, CUDA-backed)
+                  |-- VisibilityIntegrity  (the VI-tree -- paper's contribution)
+                  |-- VisibilityRoadmap    (clustering variant -- the VIR baseline)
+                  |-- GraphManager + NearestNeighbor (roadmap storage + kNN)
+    clients: visual_planning_client (single query + execute)
+             experiment_runner      (batch benchmark over 5 configurations)
+
+DIRECTORY TREE
+--------------
+    CLAUDE.md                    standing instructions (DO NOT EDIT)
+    CMakeLists.txt
+    package.xml
+    readme.txt                   operational runbook (robot bring-up etc.)
+    planner_experiments_results.txt   (tracked; currently DELETED in working tree)
+    claude_context/              paper sections + VisTSP notes + this map
+    config/                      YAML parameters
+    include/visual_based_planning/
+        VisualPlanner.h
+        common/Types.h
+        components/  Sampler.h  ValidityChecker.h  VisualIK.h
+                     PathSmoother.h  PathExecuter.h
+        data_structures/  VisibilityOracle.h  VisibilityOracleGPU.h
+                          VisibilityIntegrity.h  VisibilityRoadmap.h
+                          Graph.h  NearestNeighbor.h  nanoflann.hpp
+    launch/                      visual_planner.launch  visual_ik_client.launch
+    msg/                         VisibilityTask.msg
+    srv/                         PlanVisibilityPath.srv  VisualIK.srv
+    src/                         ROS nodes + CUDA
+
+
+--- ROOT FILES ---------------------------------------------------------------
+
+CLAUDE.md
+  Role: Top-level standing instructions. DO NOT EDIT (item 4).
   Contents: 6 numbered items -- (1) project goal (visibility-based TAMP),
     (2) platform (Ubuntu 18.04 / ROS Melodic / Husky + UR5 + flashlight),
-    (3) pointer to global_plan.txt, (4) do-not-edit rule for this file and
-    global_plan.txt, (5) create/maintain project_map.txt, (6) require detailed
-    code documentation.
+    (3) pointer to claude_context/, (4) do-not-edit rule for this file and
+    global_plan.txt, (5) maintain claude_context/project_map.txt, (6) require
+    detailed code documentation.
+
+CMakeLists.txt
+  Role: catkin build definition.
+  Significance: The one place recording the CUDA architecture assumption and the
+    non-obvious dual-library link structure.
+  Contents: C++14; `-gencode arch=compute_89,code=sm_89` (Ada / RTX 40-series --
+    change this when building on other GPUs); generates VisualIK.srv,
+    PlanVisibilityPath.srv, VisibilityTask.msg; builds
+    `visual_planner_cuda_lib` (from src/VisibilityOracleGPU.cu) and
+    `visual_planner_lib` (placeholder src/visual_planner.cpp); executables
+    visual_planning_node, visual_ik_server, visual_ik_client,
+    visual_planning_client, experiment_runner.
+
+package.xml
+  Role: catkin manifest. Deps: roscpp, std_msgs, geometry_msgs,
+    trajectory_msgs, message_generation/runtime, moveit_core,
+    moveit_ros_planning(_interface), eigen, eigen_conversions, geometric_shapes.
+  Note: CMakeLists also requires yaml-cpp, Boost, CUDA and `angles`, which are
+    not all declared here.
+
+readme.txt
+  Role: The operational runbook. Not algorithm documentation -- this is how to
+    actually run the system.
+  Significance: Highest-value file for reproducing an experiment or a hardware
+    run; also records irreversible edits made to files OUTSIDE this repo.
+  Contents, by section:
+    - SSH access to the robot (192.168.131.1, user administrator), scp usage,
+      /etc/hosts entry for cpr-a200-0738, distrobox ping-permission workaround.
+    - Full PC + robot bring-up order (Husky on -> UR5 init -> tau01_bringup ->
+      "external control" program on the UR pendant -> tau01_moveit_planning_execution
+      -> ROS_MASTER_URI/ROS_IP exports -> husky_viz). IMPORTANT: the scene must
+      be loaded AFTER the planner service is launched.
+    - How to run this package: visual_planner.launch, then scene_builder's
+      load_scene.launch (external package, obstacles.yaml, AABBs only), then
+      visual_planning_client.
+    - Simulation alternative: tau01_moveit_config demo.launch use_gui:=true.
+    - ZED camera target acquisition (zed_color_tracker/tracker.launch; ArUco
+      DICT_6X6_250 ID 42 as the robot-pose fiducial; targets = red pixels;
+      publishes /target_points).
+    - Planner parameterization guide (mirrors config/planner_config.yaml).
+    - Changes made on the Husky onboard computer: removed gripper/camera links
+      from tau01_husky_extras.urdf.xacro; added flashlight/light_beam STLs to
+      original_urdf_tau01.xacro; several <disable_collisions> entries added to
+      husky.srdf (flashlight, light_beam, bumper extensions, cable_link).
+    - Misc: home position [0, -1.57, 0, -1.57, 0, 0]; joint states on
+      /ur/joint_states; poses are w.r.t. the Husky center.
+    - A long "old irrelevant stuff" appendix from the earlier OMPL-based
+      implementation (rebuilding libompl, the moveit ompl plugin, trac_ik).
+      Historical only -- the current planner does not use OMPL.
+
+planner_experiments_results.txt
+  Role: Output of experiment_runner (per-configuration timing/success stats).
+  Status: tracked by git but DELETED in the working tree -- regenerate by
+    running experiment_runner, or `git checkout` it to recover the last
+    committed results.
+
+
+--- config/ -----------------------------------------------------------------
+
+config/planner_config.yaml
+  Role: The single knob-board for the planner service; loaded into
+    visual_planning_node's private namespace by visual_planner.launch.
+  Significance: Every switch that selects WHICH algorithm runs lives here.
+  Contents: mode ("VisRRT"|"VisPRM"); use_visual_ik; use_visibility_integrity;
+    use_visibility_roadmap; time_cap (s); group_name ("whole_robot");
+    ee_link_name (currently "light_beam" -- note the commented-out history:
+    ur_arm_tool0 / tool0 / flashlight); resolution; visibility_threshold;
+    workspace_bounds; visibility_tool_params (beam_length 3.0, beam_angle 0.26 rad
+    ~ 15 deg half-angle); enable_shortcutting; rrt.{goal_bias, max_extension,
+    max_iterations}; prm.{num_neighbors, num_samples, max_goals,
+    edge_validation_method (0=LINEAR, 1=BINARY_SEARCH), max_size};
+    visibility_integrity_params.{num_samples, num_roadmap_samples, vi_threshold,
+    k_neighbors, limit_diameter_factor}.
+  Gotcha: the three algorithm switches are ALSO read from the GLOBAL namespace at
+    every service call (see visual_planning_node.cpp::updatePlannerParams), which
+    is how experiment_runner overrides them at runtime.
+
+config/targets.yaml
+  Role: Hand-authored target point list for visual_ik_client.
+  Contents: `target_points:` list of [x,y,z]; most entries commented out.
+    Installed to the package share dir by CMake.
+
+config/sampling_regions.yaml
+  Role: AABB regions from which experiment_runner draws random target spheres --
+    the general/cluttered environment.
+  Contents: 6 axis-aligned regions with min/max corners, each annotated with its
+    center and side length.
+
+config/sampling_regions_double_room.yaml
+  Role: Same, for the "double room" benchmark environment. This is the DEFAULT
+    used by experiment_runner.
+  Contents: 6 thin slab regions at x~0.2 and x~2.05 (the two rooms' walls),
+    at three heights (z ~ 0.62, 1.12, 1.62). The x>0 test in experiment_runner's
+    room_flags_ and in VisualPlanner's random-start rejection refers to this
+    layout.
+
+
+--- msg/ and srv/ ------------------------------------------------------------
+
+msg/VisibilityTask.msg
+  Role: The task description passed to the planner.
+  Contents: start_pose, goal_pose (Pose); target_points (Point[]); start_joints,
+    goal_joints (float64[]); target_id (string). In practice only target_points
+    and start_joints are used by the current pipeline.
+
+srv/PlanVisibilityPath.srv
+  Role: Main planning service ("plan_visibility_path").
+  Contents: Request {VisibilityTask task; string planner_type} ->
+    Response {bool success; trajectory_msgs/JointTrajectory trajectory}.
+    planner_type overrides the configured mode when non-empty.
+
+srv/VisualIK.srv
+  Role: Standalone visibility-IK service (legacy path, used by visual_ik_server/
+    visual_ik_client, independent of the main planner).
+  Contents: Request {Point[] target_points} ->
+    Response {Pose best_pose; bool success; string message}.
+
+
+--- launch/ -----------------------------------------------------------------
+
+launch/visual_planner.launch
+  Role: Starts visual_planning_node and loads config/planner_config.yaml into
+    its private namespace. This is the launch file the readme's step 5.4.1 means.
+
+launch/visual_ik_client.launch
+  Role: Sets ~targets_yaml to config/targets.yaml and starts visual_ik_client.
+    Legacy IK-only demo path.
+
+
+--- include/visual_based_planning/ ------------------------------------------
+
+common/Types.h
+  Role: Shared POD types and every default parameter value.
+  Significance: The authoritative list of tunables; read it alongside
+    planner_config.yaml, since YAML omissions fall back to these defaults.
+  Contents: struct Ball {center, radius} (the target minimum-enclosing sphere,
+    P_S in the paper); enum EdgeCheckMode {LINEAR, BINARY_SEARCH};
+    struct BoundingBox (AABB, min/max per axis -- used everywhere for workspace
+    and VI-tree nodes); RRTParams {goal_bias, max_extension, max_iterations};
+    PRMParams {num_neighbors, num_samples, max_goals, edge_validation_method,
+    max_size}; VisibilityIntegrityParams {num_samples, num_roadmap_samples,
+    vi_threshold, k_neighbors, face_samples, limit_diameter_factor};
+    VisibilityToolParams {beam_angle (HALF-angle, rad), beam_length}.
+
+VisualPlanner.h  (~950 lines -- the orchestrator; largest file)
+  Role: Owns every component and implements both planners end to end.
+  Significance: THE entry point for understanding the algorithms. Maps directly
+    onto Alg. vis:prm and Alg. vis:rrt in claude_context/4_Method.tex.
+  Contents:
+    - Constructor: wires ValidityChecker -> VisualIK -> VisibilityOracle ->
+      Sampler -> PathSmoother -> robot_state/FK lambda -> target MES ->
+      VisibilityIntegrity + VisibilityRoadmap -> initialize_visibility().
+    - initialize_visibility(): pulls collision objects out of the MoveIt
+      PlanningScene and pushes their AABBs into the oracle, validity checker and
+      sampler. Handles shapes::BOX and shapes::SPHERE only (MESH is a TODO), and
+      the BOX path ignores shape rotation (comment acknowledges it).
+      Then builds the VI-tree or the visibility roadmap if enabled.
+    - planVisRRT(): RRT with (a) goal-biased sampling that draws from the VI-tree
+      visibility region, (b) per-node direct-visibility goal test via
+      checkBallBeamVisibility, (c) a VisIK "snap" branch that converts a
+      well-placed POSITION into a target-facing CONFIGURATION. Wall-clock capped
+      by time_cap_.
+    - planVisPRM(): builds/extends a persistent roadmap ACROSS service calls
+      (the graph is not reset between queries -- this is what makes PRM's
+      amortized cost low in the paper's results). Scans existing roadmap nodes
+      for visibility, samples goals via the VI-tree, expands, and returns a
+      Dijkstra path. The no-start overload samples a random valid start while
+      rejecting the double-room interior box (0<x<2.25, |y|<2.25).
+    - sampleVisibilityGoal(): the shared bridge -- ask VI-tree (or roadmap) for a
+      point that sees the target ball, build a look-at pose, solve IK.
+    - connectToGraph(), addState(), solveFK(), finalizePath() (shortcut + a final
+      collision re-validation of the raw path that logs ROS_ERROR on failure).
+  Gotchas: group_name_ defaults to "whole_robot" (9 DOF: 2 planar base + arm)
+    with "manipulator" commented out throughout; workspace_bounds_ is also
+    hardcoded in the constructor before config overrides it.
+
+components/ValidityChecker.h
+  Role: All collision and metric primitives.
+  Significance: Every state/edge check in the system funnels through here, so it
+    dominates runtime.
+  Contents: isValid() (MoveIt checkCollision on the "whole_robot" group -- NOTE
+    the group name is hardcoded in this call, not taken from group_name_);
+    interpolate() and distance() delegating to MoveIt JointModel so continuous
+    vs. revolute vs. prismatic joints are handled correctly; validateEdge() with
+    LINEAR and recursive BINARY_SEARCH modes; extend() (RRT steering, returns the
+    last valid state before collision); isPointInObstacle() / isPointInWorkspace()
+    over Boost.Geometry AABBs. The bottom half of the file is a large
+    commented-out earlier version that logged every checked configuration.
+
+components/Sampler.h
+  Role: All sampling -- both C-space and workspace.
+  Contents: sampleUniform() (MoveIt setToRandomPositions on the group);
+    sampleValidPoints() (uniform workspace points, plus optional "face sampling"
+    that seeds points just outside each obstacle face by 5 mm -- used by the
+    visibility roadmap); sampleInBox() (collision-free points in an AABB, the
+    VI-tree's S_in); sampleOutside() (points in B but outside B', optionally
+    limited to a `range` band around B' -- the VI-tree's S_out, where range is
+    the beam length); computeLookAtRotation() (builds the camera frame whose +Z
+    points at the target); two sampleVisibilityAwareState() overloads (ball
+    target and point-set target) that grow the sampling radius geometrically
+    until an IK-feasible, sufficiently-visible pose is found.
+
+components/VisualIK.h
+  Role: Visibility-aware inverse kinematics -- the paper's VisIK
+    (4_Method.tex, sec:method:vis:ik).
+  Significance: The component that turns "this place can see the target" into
+    "this joint configuration sees the target".
+  Contents: solveIK() (plain MoveIt setFromIK with a ValidityChecker callback);
+    solveVisualIK(current_joints, Ball, orientation, out) -- the core: from beam
+    half-angle theta and length h it computes the feasible standoff segment
+    [a,b] along the view axis (near bound r/tan(theta), far bound h-r), clips
+    that segment against a reachability AABB via the slab method, projects the
+    current EE position onto it, and then does a bidirectional local search
+    along the segment calling IK at each step; overloads for a point list;
+    maintainOrientationVisualIK() (keep current EE orientation);
+    greedyOrientationVisualIK() (recompute a look-at orientation first).
+  Known issues, marked in-file with @todo: the search direction/step-size logic
+    is flagged WRONG by the author ("dir should be equal to v, step size should
+    differ per direction"), and there is a commented-out hard-coded flashlight
+    offset. The clipping AABB (-5,-5,0)..(5,5,1.4) is hardcoded here.
+
+components/PathSmoother.h
+  Role: Path post-processing (the `enable_shortcutting` option).
+  Contents: smoothPath() -- exact shortcutting by dynamic programming: treats the
+    waypoints as a DAG, edge i->j exists if validateEdge succeeds, and takes the
+    minimum-cost chain. Not randomized shortcutting; it is optimal over the given
+    waypoint set but costs O(n^2) edge checks.
+
+components/PathExecuter.h
+  Role: Sends a joint-space path to the real/simulated robot.
+  Significance: The only file that talks to MoveGroupInterface for execution;
+    used by visual_planning_client, not by the planner service.
+  Contents: builds a RobotTrajectory, runs IterativeParabolicTimeParameterization
+    with velocity/acceleration scaling (defaults 0.025 / 0.05 -- deliberately
+    slow), then execute(). A `wait_time > 0` debug mode instead moves waypoint by
+    waypoint with a 2 s pause between each (useful for watching the FoV).
+
+data_structures/VisibilityIntegrity.h  (the VI-TREE -- key contribution)
+  Role: Implements the Visibility Integrity tree from 4_Method.tex
+    (sec:method:visibility:integrity:tree; Algs. vi:tree, vi:tree:recursive,
+    vi:tree:query).
+  Significance: This is the paper's headline data structure. It answers "which
+    regions of the workspace can see this target?" without per-query raycasting.
+  Contents:
+    - struct VINode: AABB, left/right/parent, is_leaf, height, path_idx string
+      (e.g. "0101" for debugging), convexity_score, and
+      visible_from_nodes: vector<(VINode*, score)> -- the inverse-visibility list.
+    - build(): recursive AABB partition, then ComputeLeafPairwiseVisibility(),
+      then ComputeParentVisibilityBottomUp().
+    - buildTreeRecursive(): samples S_in inside the box (count scaled down with
+      box volume) and S_out in the environment around it (within beam_length),
+      uploads the combined set to the GPU as one NxN visibility matrix
+      (precomputeGpuMatrix), then computes the VI score as
+      |{S_out seen by ALL of S_in}| / |{S_out seen by ANY of S_in}| using the
+      checkSeenByAll/Any reduction kernels. Splits on the longest axis while the
+      score is below vi_threshold; makes a leaf when the score passes or the box
+      shrinks below 0.1 m. Also derives a convexity_score from the same data.
+    - ComputeLeafPairwiseVisibility(): one all-pairs GPU batch over leaf centers.
+    - ComputeParentVisibilityBottomUp(): a parent's visibility list is the
+      INTERSECTION of its children's (sorted-merge), with the score averaged, and
+      the relation is written back into the seer's list so queries at any depth
+      work. Single-child nodes copy and propagate.
+    - query(Eigen::Vector3d, out): descends to the containing leaf, accumulating
+      visible_from_nodes from every ancestor on the path.
+    - query(Ball, out): the version actually used -- traverses, prunes boxes
+      outside the ball, and accumulates a per-seer BALL FRACTION. The covering
+      nodes (fully-contained nodes, where recursion stops, plus partially
+      intersecting leaves) form a disjoint cover of the ball, so their fractions
+      can be summed: each seer's score is the dimensionless fraction of the target
+      ball visible from it, in [0,1].
+    - SampleFromVisibilityRegion(Ball, out_point, threshold): rejection sampling
+      -- pick a seer, accept it with probability (its ball fraction / the max ball
+      fraction over all seers), sample a collision-free point in its box, and
+      confirm with a real checkBallBeamVisibility call. The rescale by the max is
+      deliberate: raw fractions are usually well below 1 (a seer rarely covers a
+      whole target), so using them directly would reject nearly every candidate.
+      Dividing by the max preserves the relative ranking -- all that rejection
+      sampling needs -- while keeping the best candidate's acceptance rate at 1.
+    - Geometry helpers: distSqPointBox, distSqBoxBox, isBoxFullyInBall,
+      getBoxVolume/Size, getBallVolume, getIntersectionVolume (raw m^3 of
+      box n ball; exact when the box is fully inside, Monte-Carlo otherwise),
+      getBallFraction (= getIntersectionVolume / getBallVolume). getBallFraction
+      is the SINGLE normalization point -- both the fully-contained and the
+      partial case go through it, so scores stay comparable across nodes.
+  Gotchas: makeLeaf() APPENDS every leaf to "leaf_boxes.txt" in the process CWD
+    (usually ~/.ros) on every build -- a debug/visualization dump that grows
+    across runs. intersectsWorkspaceBox() hardcodes the reachable goal AABB
+    (-5,-5,0)..(5,5,1.4); intersectsWorkspaceSphere() is an unused alternative
+    with a hardcoded 1.2 m sphere at (0.33, 0, 0.33).
+
+data_structures/VisibilityRoadmap.h
+  Role: The ALTERNATIVE to the VI-tree: a clustering-based visibility structure.
+    Selected by use_visibility_roadmap:=true. This is the "VIR" configuration in
+    experiment_runner -- i.e. the Visibility Roadmap BASELINE from
+    2_Related_work.tex, not a contribution.
+  Significance: Same public query surface as VisibilityIntegrity
+    (SampleFromVisibilityRegion, query, isConnectedToTarget), so VisualPlanner
+    can swap one for the other behind a single boolean.
+  Contents: build() = sample N valid workspace points (with optional face
+    sampling) -> computeSampleVisibility (all-pairs, GPU with a CPU fallback,
+    stored as sorted adjacency lists) -> performClustering() ->
+    buildClusterVisibilityGraph() -> build a kNN index over the samples.
+    Clustering is greedy: seed on a random point, walk outward by distance, admit
+    a point while the incremental VI score (|intersection of visibility sets| /
+    |union|) stays >= vi_threshold, stop when the diameter exceeds
+    limit_diameter_factor * current diameter. Each cluster gets a centroid and a
+    bounding radius. The cluster graph gets an edge when random member pairs are
+    mutually visible, weighted by the observed fraction, and is pruned to
+    clusters intersecting the goal AABB. query() classifies a point by kNN
+    majority vote over cluster labels. Prints extensive cluster statistics and
+    dumps "clustered_points.txt".
+  Gotcha: goal AABB (-5,-5,0)..(5,5,1.4) is hardcoded again here.
+
+data_structures/VisibilityOracle.h
+  Role: All visibility/FoV queries. The CPU-side API over the CUDA kernels.
+  Significance: The performance-critical core; every planner decision is
+    ultimately an oracle call.
+  Contents:
+    - Obstacle store as Boost.Geometry Box3D, mirrored to GPU lazily via a
+      gpu_dirty_ flag (updateGPUObstacles).
+    - isPointInFOV(): the cone test -- transform the target into the sensor
+      frame, require +Z half-space, distance <= beam_length, and
+      cos(angle) >= cos(beam_angle).
+    - isPointInBeam() = isPointInFOV && unoccluded segment.
+    - checkBallBeamVisibility(): the central scoring function -- Monte-Carlo
+      samples num_samples_ (100) points in the target ball and returns the
+      illuminated fraction. Overloads take an Isometry3d pose, a joint vector
+      (via the injected FK lambda), or a bare source position (in which case a
+      look-at frame is synthesized). NOTE: the GPU batch branch inside this
+      function is disabled by `if (false)` -- it always runs the CPU path.
+    - computeBatchVisibility(): all-pairs NxN on GPU.
+    - checkBatchVisibility(): a list of specific segments on GPU.
+    - precomputeGpuMatrix() + checkSeenByAllGPU() / checkSeenByAnyGPU(): upload
+      an NxN matrix once and run cheap index-only reductions against it -- this
+      is what makes VI-tree construction tractable.
+    - VisibilityMethod enum {BF, GPUBF, KDTree}; default GPUBF; KDTree throws.
+
+data_structures/VisibilityOracleGPU.h
+  Role: The C/CUDA boundary -- POD structs and kernel launcher declarations, free
+    of Boost/Eigen so the .cu file can include it.
+  Contents: struct GPUBox, struct GPUPoint; declarations of
+    launchVisibilityKernel, launchAllPairsVisibilityKernel,
+    launchBatchSegmentKernel, launchComputeSeenByAll, launchComputeSeenByAny.
+
+data_structures/Graph.h
+  Role: Roadmap/tree storage and graph algorithms (namespace-free; class
+    GraphManager).
+  Contents: Boost adjacency_list<vecS, vecS, undirectedS> with GraphVertex
+    {joint_config, ee_pose} and GraphEdge {weight}; addVertex/addEdge (note:
+    addEdge inserts BOTH directions into an already-undirected graph, so each
+    logical edge appears twice); getVertexConfig/getVertexPose; isEdge;
+    shortestPath (Boost Dijkstra + backtracking); inSameComponent (BFS with early
+    exit -- used as a cheap pre-check before Dijkstra); countConnectedComponents
+    (prints the k largest with a representative config); exportCCMap() (writes
+    cc_map.txt: id, joint values, connected-component id -- for offline analysis
+    of why PRM failed to connect); printVertexDegrees.
+
+data_structures/NearestNeighbor.h
+  Role: kNN over configurations, with a robot-aware metric.
+  Significance: Contains a real performance trap -- see below.
+  Contents: PointCloud adaptor; RobotStateDistance metric that uses MoveIt
+    JointModel::distance per joint and then WEIGHTS the dimensions -- prismatic
+    joints (the Husky base translations) by the DOF count, revolute joints by
+    (n - i) so proximal arm joints dominate distal ones. This weighting is what
+    makes nearest-neighbour queries prefer moving the arm over driving the base.
+    Wraps nanoflann KDTreeSingleIndexAdaptor; also provides bruteForceKNN.
+  Gotcha: addPoint() DELETES AND REBUILDS the entire kd-tree on every insertion,
+    making roadmap construction O(n^2 log n). This is the most likely target if
+    PRM build time needs to come down (cf. commit "trying to make NN faster").
+
+data_structures/nanoflann.hpp
+  Role: Vendored third-party header (nanoflann kd-tree). Do not edit.
+
+
+--- src/ --------------------------------------------------------------------
+
+src/visual_planning_node.cpp
+  Role: The main ROS service node -- the production entry point.
+  Contents: class VisualPlanningNode wraps a PlanningSceneMonitor and a
+    VisualPlanner and advertises "plan_visibility_path".
+    - loadStaticConfig(): reads every parameter from the PRIVATE namespace
+      (planner_config.yaml) into the planner.
+    - updatePlannerParams(): on EVERY service call, re-reads five switches from
+      the GLOBAL namespace (/planner/use_visual_ik, /planner/use_visibility_integrity,
+      /planner/use_visibility_roadmap, /planner/enable_shortcutting, planner/mode)
+      and sets params_changed_ if any differ. This is the mechanism
+      experiment_runner uses to switch algorithms without restarting the node.
+    - planCallback(): if uninitialized OR params changed, resets the planner and
+      re-snapshots the planning scene (this is what triggers VI-tree rebuild);
+      computes the target MES from req.task.target_points; takes start_joints from
+      the request or the current state; dispatches to planVisPRM if the mode
+      string contains "PRM", else planVisRRT; packs the result into a
+      JointTrajectory with the group's active joint names.
+    - main(): RobotModelLoader + PlanningSceneMonitor with scene/world/state
+      monitors, AsyncSpinner(2).
+
+src/visual_planning_client.cpp
+  Role: Single-query client: request a plan and execute it on the robot.
+  Contents: resolves the planner mode (private ~mode -> /visual_planning_node/
+    planner/mode -> "VisRRT" default); reads the flat /target_points array
+    (published by the ZED tracker, see readme) into Point[]; calls the service;
+    converts the returned trajectory back to vector<vector<double>> and runs it
+    through PathExecuter("whole_robot") at scaling 1.0/1.0.
+
+src/experiment_runner.cpp
+  Role: The benchmark harness that produced the paper's numbers.
+  Significance: The single best file for understanding the experimental protocol
+    in claude_context/5_Experiments.tex.
+  Contents:
+    - Five configurations compared, each a (mode, use_visual_ik,
+      use_visibility_integrity, use_visibility_roadmap) tuple:
+        VisRRT (VisRRT + VisIK), RRT (plain), VisPRM (PRM + VI-tree),
+        VIR (PRM + visibility roadmap = the baseline), PRM (plain).
+      Switched at runtime by setting the global /planner/* params.
+    - generateTargetProblemsFromRegions(): loads sampling_regions_double_room.yaml,
+      pulls the real obstacle AABBs out of the live MoveIt planning scene, and
+      pre-generates 200 target problems -- each a sphere sampled inside a region
+      with the largest radius that fits, rejected if it intersects any obstacle,
+      then populated with 100 uniformly-distributed interior points.
+    - 200 trials per configuration; trial 0 is recorded separately as the
+      initialization/build cost (the amortization argument in the paper).
+    - computeStats (avg/median/min/max/stddev), printStats, saveToFile ->
+      planner_experiments_results.txt, including per-run success flags and a
+      per-target room flag (x>0 = "windows" room, x<0 = "door" room).
+  Bug worth knowing: room_flags_ is only `reserve`d, never `resize`d, but is
+    written via `room_flags_[i] = ...` -- out-of-bounds writes to a vector of
+    size 0. The room column in saved results is therefore unreliable.
+
+src/VisibilityOracleGPU.cu
+  Role: All CUDA kernels + their host launchers.
+  Contents:
+    - __device__ checkSlabIntersection(): ray/AABB slab test, the primitive
+      underneath every visibility query.
+    - checkIntersectionKernel: one segment vs. all obstacles, early-outs on a
+      shared found flag.
+    - allPairsVisibilityKernel: NxN point-pair visibility (fills the matrix used
+      by the VI-tree and the visibility roadmap).
+    - batchSegmentKernel: M independent segments.
+    - seenByAllKernel / seenByAnyKernel: reductions over a cached NxN matrix
+      against a guard-index set -- the numerator and denominator of the VI score.
+    - Host wrappers matching VisibilityOracleGPU.h.
+
+src/visual_ik_server.cpp
+  Role: Standalone "visual_ik_server" service (legacy, predates VisualPlanner).
+  Contents: wraps MoveGroupInterface("whole_robot"); params num_iters (20) and
+    step_size (0.05 m); ee_link_ hardcoded to "ur_arm_tool0" (NOTE: this differs
+    from the planner's current ee_link "light_beam"); given target points it
+    searches for a valid observation pose and returns it as a geometry_msgs/Pose.
+  Status: not part of the VisPRM/VisRRT pipeline. Kept for reference/demos.
+
+src/visual_ik_client.cpp
+  Role: Client for the above. Loads config/targets.yaml, calls visual_ik_server,
+    then plans and executes to the returned pose with MoveIt.
+
+src/visual_planner.cpp
+  Role: 3-line placeholder so CMake has a compilation unit for
+    visual_planner_lib. Contains no logic. If implementations are ever moved out
+    of the headers, they go here.
+
+
+CROSS-CUTTING NOTES (things that will bite you)
+-----------------------------------------------
+1. "whole_robot" vs "manipulator": the planning group was switched from the UR5
+   alone to the full 9-DOF mobile manipulator. The old value survives as
+   commented-out lines in VisualPlanner.h, ValidityChecker.h, NearestNeighbor.h,
+   visual_ik_server.cpp, visual_ik_client.cpp, visual_planning_client.cpp.
+   ValidityChecker::isValid() still hardcodes "whole_robot" in its
+   getJointModelGroup call rather than using group_name_.
+2. The reachable/goal AABB (-5,-5,0)..(5,5,1.4) is hardcoded in THREE places:
+   VisibilityIntegrity::intersectsWorkspaceBox, VisibilityRoadmap::
+   buildClusterVisibilityGraph, and VisualIK::solveVisualIK. Changing the
+   environment means changing all three.
+3. Debug artifacts are written to the process CWD (~/.ros when launched by
+   roslaunch): leaf_boxes.txt (appended, grows unboundedly), clustered_points.txt,
+   cc_map.txt.
+4. The CUDA arch flag is pinned to sm_89 in CMakeLists.txt.
+5. VisibilityOracle::checkBallBeamVisibility's GPU branch is dead code
+   (`if (false)`); ball visibility scoring is CPU-bound.
+6. The PRM roadmap deliberately PERSISTS across service calls; only a param
+   change or scene change resets it. Timing numbers only make sense in that light.
+
+
+==============================================================================
+PART 2 -- claude_context/ (paper + design notes)
+==============================================================================
+
+Recurring LaTeX macros: \tamp, \vistamp, \tvmp, \sbmp, \prm, \rrt, \visprm,
+\visrrt, \vi (Visibility Integrity), \fov, \cspace, \ik/\fk, \aabb.
 
 global_plan.txt
-  Role: The project's global plan, named in core_instructions.txt (items 3 & 4).
-    Do NOT edit (item 4).
-  Significance: Authoritative statement of the current implementation direction
-    and the ordered task list for building VisTSP. Ties the Group B design notes
-    to concrete, sequenced work items.
-  Contents: States the current plan -- implement an algorithm for the visibility
-    travelling-salesman problem (VisTSP), where the task is to search / illuminate
-    / film a set of targets -- followed by a 6-step ordered task list:
-      1. Write the multi-target query for the VI-tree.
-      2. Implement Local VisRRG.
-      3. Implement the "Greek TSP" algorithm.
-      4. Implement LocalVisTSP.
-      5. Implement the covering algorithm (covering regions with copies of the
-         robot's reachable volume).
-      6. Implement a TSP algorithm for the 2D (mobile-base) locations.
-    Steps 1-4 build the LOCAL pipeline (multi-target VI-tree query -> Local
-    VisRRG -> Greek-style TSP shortcutting -> LocalVisTSP); steps 5-6 build the
-    GLOBAL pipeline (base-location coverage -> 2D tour). Together they trace the
-    GLVisTSP framework end to end (see VisTSP_frameworks.txt) and correspond
-    one-to-one with the backlog in VisTSP_missing_components.txt.
-
-
-THE PAPER (LaTeX sections) -- Group A: TVMP
--------------------------------------------
-These are sections of a single paper. Recurring macros seen across them:
-\tamp, \vistamp (visibility-based TAMP), \tvmp (Target Visibility Motion
-Planning), \sbmp (sampling-based motion planning), \prm, \rrt, \visprm,
-\visrrt, \vi (Visibility Integrity), \fov, \cspace, \ik/\fk, \aabb.
+  Role: The project's global plan. DO NOT EDIT (CLAUDE.md item 4).
+  Contents: implement VisTSP (search/illuminate/film a SET of targets), via a
+    6-step ordered task list: (1) multi-target query for the VI-tree,
+    (2) Local VisRRG, (3) "Greek TSP" algorithm, (4) LocalVisTSP,
+    (5) covering algorithm (cover regions with copies of the reachable volume),
+    (6) TSP over the 2D base locations. Steps 1-4 are the LOCAL pipeline,
+    5-6 the GLOBAL pipeline; together they are the GLVisTSP framework.
 
 1_introduction.tex
   Role: Introduction (\label{sec:intro}).
-  Significance: Motivates visibility-based TAMP, frames the gap (planners built
-    for short-range tools handle the elongated non-compact 3D FoV poorly),
-    and states the paper's three contributions.
-  Contents: Motivation and applications (tracking, exploration, search-and-
-    rescue, UV disinfection); why distance heuristics fail for FoV devices;
-    formalization of TVMP; three contributions -- (1) the Visibility Integrity
-    (VI) tree data structure, (2) VisPRM and VisRRT planners, (3) simulated +
-    real-world evaluation (flashlight on a robot). Figure fig:tvmp. Mentions
-    open-source planner code (link redacted for anonymity).
+  Contents: motivation (tracking, exploration, search-and-rescue, UV
+    disinfection); why distance heuristics fail for an elongated non-compact 3D
+    FoV; formalization of TVMP; three contributions -- the VI-tree, the
+    VisPRM/VisRRT planners, and simulated + real-world evaluation. Figure
+    fig:tvmp. Mentions open-source planner code (link redacted for anonymity).
 
 2_Related_work.tex
   Role: Related work (\label{sec:related:work}).
-  Significance: Positions TVMP against prior visibility and SBMP literature and
-    identifies which prior methods can/cannot serve as benchmarks.
-  Contents: Four themed paragraphs -- planar visibility task planning; spatial
-    visibility task planning (incl. Visibility Roadmap / VIR, UV-disinfection
-    PRM used as a baseline, RRT* variants); other spatial visibility tasks
-    (visual servoing / visual tracking -- local, so unsuitable as benchmarks);
-    and sampling-based motion planning background (PRM, RRT and variants).
+  Contents: planar visibility task planning; spatial visibility task planning
+    (Visibility Roadmap / VIR -- implemented here as VisibilityRoadmap.h and used
+    as the "VIR" benchmark; UV-disinfection PRM; RRT* variants); visual servoing
+    and tracking (local, hence unsuitable as benchmarks); SBMP background.
 
 3_Preliminaries.tex
   Role: Preliminaries (\label{sec:preliminaries}).
-  Significance: Formal definitions and assumptions the method relies on; defines
-    the VI measure central to the VI-tree.
-  Contents: Formal TVMP problem definition (robot r with conic FoV C, workspace
-    E, target set P, start s -> reach terminal config t with P inside FoV);
-    the alpha-TVMP variant; simplifying assumptions (target set approximated by
-    its minimum enclosing sphere P_S; environment approximated by AABBs/spheres/
-    meshes for GPU batching); and the Visibility Integrity (VI) definition as an
-    intersection-over-union of visibility sets. Figures fig:vi:example.
-  Note: Commented-out FK/IK definitions live here; the active FK/IK discussion
-    is in 4_Method.tex.
+  Contents: formal TVMP definition (robot r with conic FoV C, workspace E, target
+    set P, start s -> terminal config t with P inside the FoV); the alpha-TVMP
+    variant; assumptions (target set approximated by its minimum enclosing sphere
+    P_S -- the `Ball` struct in code; environment as AABBs/spheres/meshes for GPU
+    batching -- matching initialize_visibility()); the VI definition as an
+    intersection-over-union of visibility sets. Figure fig:vi:example.
+    Commented-out FK/IK definitions live here; the active discussion is in
+    4_Method.tex.
 
 4_Method.tex
-  Role: Method (\label{sec:method}). Largest and most detailed section.
-  Significance: Core algorithmic contribution -- the components and full
-    pseudocode for VisPRM and VisRRT, plus a probabilistic-completeness note.
-  Contents:
-    - Adjustments to SBMP (sec:method:adjusments): why TVMP has no explicit goal
-      config, motivating two components.
-    - VI-tree (sec:method:visibility:integrity:tree): recursive AABB partition
-      by outward-VI score; bottom-up visibility-list propagation.
-      Algorithms: Alg. vi:tree (construction), Alg. vi:tree:recursive (recursive
-      build), Alg. vi:tree:query (recursive query returning node->visible-volume
-      map). Figure fig:svi:leaves.
-    - Visibility IK / VisIK (sec:method:vis:ik): an IK map from target set to a
-      config that sees P_S, using a seed config g; searches a feasible segment
-      toward P_S center, intersects with reachable volume, discretizes, lifts to
-      SE(3), runs a standard IK solver, returns nearest-valid config to the seed.
-      (A VisIK pseudocode block exists but is currently \remove'd.)
-    - VisPRM (sec:method:visprm): Alg. vis:prm -- builds C-space roadmap + VI-tree,
-      connects start, scans roadmap FoVs for goals, samples goal positions via
-      VI-tree queries, lifts to poses + IK, returns SSSP path.
-    - VisRRT (sec:method:visrrt): Alg. vis:rrt -- standard RRT extension with a
-      visibility oracle; when a new node sees enough of P_S, VisIK generates a
-      goal to extend toward.
-    - Probabilistic completeness note: both planners are probabilistically
-      complete under a non-zero-measure, reachable-with-clearance goal set
-      (corollary of a cited RRT completeness theorem).
-  Cross-refs forward to a sec:experiments and sec:conclusion (sections not
-    present as separate files in the current directory).
+  Role: Method (\label{sec:method}). Largest section; the algorithmic core.
+  Contents: adjustments to SBMP for a goal-less problem; the VI-tree
+    (Algs. vi:tree, vi:tree:recursive, vi:tree:query; Figure fig:svi:leaves);
+    VisIK (segment toward P_S center, intersect with reachable volume,
+    discretize, lift to SE(3), standard IK, nearest-valid-to-seed -- its
+    pseudocode block is currently \remove'd); VisPRM (Alg. vis:prm); VisRRT
+    (Alg. vis:rrt); a probabilistic-completeness argument.
+  Code correspondence: VisibilityIntegrity.h, VisualIK.h,
+    VisualPlanner::planVisPRM, VisualPlanner::planVisRRT respectively.
 
-
-VisTSP DESIGN / PLANNING NOTES -- Group B: next-stage work
-----------------------------------------------------------
-These plain-text files scope the Visibility TSP extension: observing MANY
-targets with the mobile manipulator, layering a global (mobile-base) and local
-(arm) structure on top of the TVMP building blocks from the paper.
+5_Experiments.tex
+  Role: Experiments (\label{sec:experiments}). Present as a file -- the previous
+    map predates it.
+  Contents: subsec "Algorithms evaluation" (\label{sec:experiments:sim}) and
+    "Real-world demonstrations"; figures fig:simulated:experiments,
+    fig:results:amortized, fig:results:success:rate,
+    fig:physical:experiments:two:2; tables tab:sim:exp and tab:physical:exp; a
+    large amount of commented-out earlier figures/tables and an old
+    "Experimental setup" subsection.
+  Code correspondence: src/experiment_runner.cpp + config/sampling_regions*.yaml.
+  Note: no conclusion section file exists in the directory yet.
 
 VisTSP_problem.txt
   Role: Problem statement for Visibility TSP and its subproblems.
-  Significance: The authoritative definition of what VisTSP is trying to solve;
-    anchor for the frameworks and missing-components files.
-  Contents: VisTSP defined as finding a motion plan whose swept FoV covers a
-    target set P. Four subproblems: (1) find regions so each target is seen by
-    >= k regions (via VI-tree multi-target query + pruning); (2) find 2D floor
-    locations for the mobile base whose workspace spheres cover the regions
-    (with optional beta coverage fraction); (3) local plan to see a location's
-    targets while the base stays within delta of the location; (4) global plan
-    routing the base through a subset of locations covering all targets.
+  Contents: VisTSP = find a motion plan whose swept FoV covers a target set P.
+    Four subproblems: (1) regions such that each target is seen by >= k regions
+    (VI-tree multi-target query + pruning); (2) 2D floor locations for the base
+    whose workspace spheres cover those regions (optional beta coverage
+    fraction); (3) a local plan seeing a location's targets with the base fixed
+    within delta; (4) a global plan routing the base through a covering subset.
 
 VisTSP_missing_components.txt
-  Role: Backlog of code/algorithm components still needed to realize VisTSP.
-  Significance: The practical to-build list bridging the paper's code and the
-    VisTSP frameworks. Maps directly onto the 6 steps of global_plan.txt.
+  Role: Backlog of components still needed. Maps 1:1 onto global_plan.txt.
   Contents: (1) VI-tree multi-target query with coverage parameters (vector of
-    target spheres, beta fraction, returns region->targets map); (2) region-
-    pruning algorithm (keep every target covered by >= k regions while shrinking
-    the region set); (3) set-cover of workspace regions by reachable-volume
-    copies; (4) local TSP (mostly 3D, base ~fixed); (5) global TSP (mostly 2D,
-    arm ~irrelevant).
+    target spheres, beta fraction, returns region->targets map); (2) region
+    pruning (keep every target covered >= k times while shrinking the region
+    set); (3) set-cover of workspace regions by reachable-volume copies;
+    (4) local TSP (3D, base ~fixed); (5) global TSP (2D, arm ~irrelevant).
 
 VisTSP_frameworks.txt
-  Role: Candidate end-to-end frameworks for VisTSP.
-  Significance: Two proposed pipelines -- one primary, one benchmark.
-  Contents:
-    - GLVisTSP (Global/Local Visibility TSP) [preferred]: compute regions ->
-      pick base locations covering them -> global TSP over locations -> per-
-      location local VisTSP -> execute global tour with local tours at each stop.
-      This is the pipeline the global_plan.txt task order builds.
-    - VisCfgTSP (Visibility Configurations TSP) [benchmark]: compute configs so
-      each target watched by >= K configs -> TSP visiting one watching-config
-      per target.
+  Role: Two candidate end-to-end frameworks.
+  Contents: GLVisTSP (preferred): regions -> base locations covering them ->
+    global TSP over locations -> per-location local VisTSP -> execute.
+    VisCfgTSP (benchmark): configs such that each target is watched by >= K
+    configs -> TSP visiting one watching config per target.
 
 local_VisTSP.txt
-  Role: Detailed sketch of the LOCAL VisTSP algorithm (subproblem 3 / LTSP).
-  Significance: Fills in the "local plan" stage used inside GLVisTSP; expands
-    global_plan.txt steps 2-4.
-  Contents:
-    - Local VisRRG(r, E, B, T, k): build a local roadmap by sampling the VI-tree
-      for target configs, connecting them, and extending toward targets seen
-      fewer than k times using visibility checks + VisIK, within local bounding
-      box B.
-    - "TSP Greek Alg": MST -> post-order traversal -> shortcut with a local
-      planner, falling back to RRT/VisRRT when a shortcut is hard to find (the
-      noted interesting case).
-    - LocalVisTSP: run Local VisRRG to get graph G, then GreekTSP(G).
+  Role: Detailed sketch of the LOCAL VisTSP algorithm (subproblem 3).
+  Contents: Local VisRRG(r, E, B, T, k) -- sample the VI-tree for target configs,
+    connect them, extend toward under-observed targets using visibility checks +
+    VisIK, all within a local bounding box B; "TSP Greek Alg" -- MST -> post-order
+    traversal -> shortcut with a local planner, falling back to RRT/VisRRT when a
+    shortcut is hard (the interesting case); LocalVisTSP = Local VisRRG then
+    GreekTSP.
+
+project_map.txt
+  Role: This file.
 
 
-THE CODE REPOSITORY -- Group C: implementation
-----------------------------------------------
-[NOT PRESENT IN THIS CHAT'S PROJECT VIEW -- fill in from the Git repo.]
+==============================================================================
+PART 3 -- VisTSP BACKLOG vs. CODE (what exists, what does not)
+==============================================================================
 
-  Role: The implementation of the VisTSP global plan -- the ROS/C++/Python code
-    realizing the VI-tree, VisIK, VisPRM/VisRRT, and the VisTSP pipeline
-    components enumerated in global_plan.txt and VisTSP_missing_components.txt.
-  Significance: Where the algorithms above actually get built, run on the Husky +
-    UR5 platform, and evaluated. Detailed code documentation is required
-    (core_instructions.txt item 6).
-  Contents: UNKNOWN from this chat -- the repository is under version control on
-    the local machine and is not mirrored into the read-only project view here,
-    so its file tree could not be inspected when this entry was written.
-    TO DOCUMENT (ideally via Claude Code, which can read the repo directly):
-      - Top-level layout (ROS package(s), src/, scripts/, launch/, config/,
-        tests/, etc.).
-      - For each significant module/file: its role, which global_plan.txt step
-        or VisTSP_missing_components.txt item it implements, key
-        classes/functions, and dependencies.
-      - Build / run instructions and platform assumptions (Ubuntu 18.04,
-        ROS Melodic).
-      - Mapping between code artifacts and the paper's algorithms (VI-tree,
-        VisIK, VisPRM, VisRRT) and the VisTSP components.
+global_plan.txt step               Status   Where it would go
+---------------------------------  -------  ---------------------------------
+1. VI-tree multi-target query      MISSING  VisibilityIntegrity.h -- extend
+                                            query(Ball,...) to take
+                                            vector<Ball> + beta and return a
+                                            region->targets map. The existing
+                                            single-Ball query, its volume
+                                            accumulation, and the seer
+                                            bookkeeping are the starting point.
+1b. Region pruning (>= k coverage) MISSING  New; consumes the above.
+2. Local VisRRG                    MISSING  New data_structures/ or components/
+                                            file; reuses Sampler, VisualIK,
+                                            VisibilityOracle, GraphManager.
+3. Greek TSP (MST + shortcut)      MISSING  New; GraphManager would need an MST
+                                            (Boost has kruskal/prim) and the
+                                            shortcut step can reuse
+                                            PathSmoother/ValidityChecker.
+4. LocalVisTSP                     MISSING  Composition of 2 + 3.
+5. Covering / set cover            MISSING  New; needs a reachable-volume model,
+                                            which does not exist yet (the
+                                            hardcoded AABBs in note 2 above are
+                                            the current stand-in).
+6. 2D TSP over base locations      MISSING  New.
+
+Everything currently in the repo serves the TVMP paper (single target set). The
+building blocks the VisTSP steps will reuse are: VisibilityIntegrity (query +
+SampleFromVisibilityRegion), VisualIK, VisibilityOracle (especially the cached
+GPU matrix + seen-by-all/any reductions), Sampler, GraphManager, ValidityChecker.
 
 
 HOW THE PIECES RELATE
 ---------------------
-The paper (Group A) delivers the primitives: the VI measure, the VI-tree (with
-construction and query), VisIK, and the VisPRM/VisRRT planners for single-goal
-TVMP. The VisTSP notes (Group B) reuse those primitives -- especially the VI-tree
-query and VisIK -- to build multi-target coverage: regions from the VI-tree, base
-locations covering those regions, a global tour over locations, and local
-visibility tours (Local VisRRG + Greek-style TSP shortcutting) at each stop.
-The global plan (global_plan.txt) sequences this into 6 build steps, and the code
-repository (Group C) is where those steps are implemented and evaluated on the
-Husky + UR5 platform.
+The paper (Part 2, Group A) defines the primitives -- the VI measure, the VI-tree,
+VisIK, and the VisPRM/VisRRT planners for single-goal TVMP. Part 1 (the repo) is
+their implementation on the Husky + UR5, together with the VIR baseline and the
+benchmark harness that produced 5_Experiments.tex. The VisTSP notes (Part 2,
+Group B) reuse those same primitives -- above all the VI-tree query and VisIK --
+to build multi-target coverage: regions from the VI-tree, base locations covering
+those regions, a global tour over locations, and local visibility tours at each
+stop. global_plan.txt sequences that into 6 build steps, none of which are
+implemented yet (Part 3).
 
 
 MAINTENANCE NOTES
 -----------------
 - Update this map whenever files are added, removed, or substantially changed
-  (core_instructions.txt item 5).
-- Fill in the "THE CODE REPOSITORY" section with the repo's actual file tree and
-  per-file descriptions. This is best done from an environment with direct access
-  to the repository (e.g., Claude Code), since the repo is not visible in this
-  chat's read-only project view.
-- The paper references sec:experiments and sec:conclusion; add entries if/when
-  those sections appear as files.
+  (CLAUDE.md item 5).
+- When a global_plan.txt step gets implemented, move it out of the Part 3 table
+  and give it a full entry in Part 1.
+- If implementations migrate out of the headers into src/, update the
+  "ARCHITECTURAL SHAPE" note -- the header-only convention is the single most
+  important navigation fact about this repo.
+- The "CROSS-CUTTING NOTES" list is a live inventory of duplicated/hardcoded
+  values; prune entries as they are fixed rather than letting it go stale.
