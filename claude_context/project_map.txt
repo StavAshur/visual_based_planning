@@ -794,8 +794,9 @@ global_plan.txt step               Status   Where it would go
 1. VI-tree multi-target query      DONE     VisibilityIntegrity.h --
                                             query(vector<Ball>,
                                             MultiTargetQueryResult&, threshold).
-                                            UNCOMPILED / UNTESTED: no caller
-                                            exercises it yet.
+                                            Compiles; UNEXERCISED -- no caller
+                                            invokes it yet, so its behaviour is
+                                            unverified.
 1b. Region pruning (>= k coverage) MISSING  New; consumes the above. Note the
                                             query returns nested seers, so
                                             pruning must decide how to treat a
