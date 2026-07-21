@@ -8,6 +8,7 @@
 #include <iostream>
 #include <fstream>
 #include <unordered_set>
+#include <unordered_map>
 #include <random>
 #include <map>
 #include <queue>
@@ -42,6 +43,24 @@ struct VINode {
     std::vector<std::pair<VINode*, double>> visible_from_nodes; // IDs of nodes this node sees + visibility score
     double convexity_score = 0.0;
     bool visibility_computed = false;
+};
+
+/**
+ * @brief Result of a multi-target VI-tree query (VisTSP subproblem 1).
+ *
+ * Holds, for a vector of target balls, which workspace regions see a large enough
+ * part of each target. The two members are the same relation in both directions:
+ * region pruning walks regions and asks which targets it would lose, then validates
+ * per target that each is still covered enough times, so both are built once here.
+ */
+struct MultiTargetQueryResult {
+    /// per_target[t] = the regions seeing at least a beta-fraction of target t,
+    /// each paired with that fraction (in [0, 1]). Indexed as the query's input.
+    std::vector<std::vector<std::pair<VINode*, double>>> per_target;
+
+    /// The inverse: for each region that survived the beta threshold for at least
+    /// one target, the indices of the targets it sees.
+    std::unordered_map<VINode*, std::vector<int>> region_to_targets;
 };
 
 class VisibilityIntegrity {
@@ -92,7 +111,13 @@ public:
 
         std::cout << "[VisibilityIntegrity] Building Visibility Integrity Tree..." << std::endl;
         
+        // Drop everything the previous tree left behind before its nodes are freed:
+        // all of this state indexes into nodes that are about to stop existing.
         leaves_.clear();
+        touched_.clear();
+        accum_.clear();
+        num_nodes_ = 0;
+
         int node_counter = 0;
         int leaf_counter = 0;
 
@@ -107,7 +132,12 @@ public:
         root_->id = node_counter++;
 
         buildTreeRecursive(root_.get(), workspace_bounds_, "0", node_counter, leaf_counter);
-        
+
+        // Ids occupy [0, node_counter) exactly; size the query accumulator to match.
+        num_nodes_ = static_cast<size_t>(node_counter);
+        accum_.assign(num_nodes_, 0.0);
+        touched_.clear();
+
         ComputeLeafPairwiseVisibility();
         ComputeParentVisibilityBottomUp(root_.get());
 
@@ -304,23 +334,14 @@ public:
                     // ROS_INFO("   -> Processing %lu seers from this node (Frac: %.4f):",
                     //          node->visible_from_nodes.size(), ball_fraction);
                     // Iterate over 'visible_from_nodes' (which stores pairs <VINode*, double>)
-                    // We extract the pointer 'u_ptr' and pair it with the computed fraction.
+                    // and credit this covering node's fraction to every seer of it.
                     for (const auto& seer_pair : node->visible_from_nodes) {
                         VINode* u = seer_pair.first;
 
-                        bool found = false;
-                        for (auto& existing_pair : out_seeing_nodes) {
-                            if (existing_pair.first == u) {
-                                existing_pair.second += ball_fraction;
-                                found = true;
-                                break;
-                            }
-                        }
-
-                        if (!found) {
-                            out_seeing_nodes.push_back({u, ball_fraction});
-                        // ROS_INFO("      + Added Seer ID: %d", u->id);
-                        }
+                        // A zero entry means "not yet credited in this query": ball_fraction
+                        // is strictly positive here, so a credited entry never returns to 0.
+                        if (accum_[u->id] == 0.0) touched_.push_back(u);
+                        accum_[u->id] += ball_fraction;
                     }
                 }
 
@@ -338,6 +359,65 @@ public:
         };
 
         traverse(root_.get());
+
+        // Emit the accumulated seers and restore the all-zeros invariant on accum_.
+        out_seeing_nodes.reserve(touched_.size());
+        for (VINode* u : touched_) {
+            out_seeing_nodes.push_back({u, accum_[u->id]});
+            accum_[u->id] = 0.0;
+        }
+        touched_.clear();
+    }
+
+    /**
+     * @brief Multi-target query: which regions see enough of each of several targets.
+     *
+     * For every target ball, collects the regions that see at least a `threshold`
+     * fraction of it. This is the entry point of the VisTSP pipeline: the regions are
+     * what region pruning thins down, what the base-location set cover must cover, and
+     * where the local planner looks for configurations that view a target.
+     *
+     * The per-target fractions are accumulated independently. They may only be summed
+     * within a single target, where the covering nodes form a disjoint cover of that
+     * ball; fractions for different targets measure different volumes and are not
+     * comparable as a sum.
+     *
+     * @param targets   The target balls to cover.
+     * @param out       Populated with the region/target relation in both directions.
+     *                  Any previous contents are discarded.
+     * @param threshold Coverage fraction in [0, 1] (the beta of the VisTSP notes). A
+     *                  region is reported for a target when it sees at least this
+     *                  fraction of that target's ball. A target may end up with no
+     *                  regions at all if the threshold exceeds what any single region
+     *                  achieves for it.
+     */
+    void query(const std::vector<Ball>& targets, MultiTargetQueryResult& out,
+               double threshold = 0.8) {
+        out.per_target.clear();
+        out.region_to_targets.clear();
+        out.per_target.resize(targets.size());
+
+        if (!root_) return;
+
+        // Reused across targets so the per-target seer list costs no fresh allocation.
+        std::vector<std::pair<VINode*, double>> seers;
+
+        for (size_t t = 0; t < targets.size(); ++t) {
+            query(targets[t], seers);
+
+            for (const auto& seer_pair : seers) {
+                if (seer_pair.second >= threshold) {
+                    out.per_target[t].push_back(seer_pair);
+                    out.region_to_targets[seer_pair.first].push_back(static_cast<int>(t));
+                }
+            }
+
+            if (out.per_target[t].empty()) {
+                ROS_WARN("[VisibilityIntegrity] Multi-target query: target %zu has no region "
+                         "seeing a %.3f fraction of it (%zu regions see it at all).",
+                         t, threshold, seers.size());
+            }
+        }
     }
 
 
@@ -351,10 +431,17 @@ private:
     std::shared_ptr<VisibilityOracle> vis_oracle_;
     std::shared_ptr<Sampler> sampler_;
     std::mt19937 rng_;
-    BoundingBox workspace_bounds_; 
+    BoundingBox workspace_bounds_;
     size_t num_nodes_ = 0;
     std::unique_ptr<VINode> root_;
-    std::vector<VINode*> leaves_; 
+    std::vector<VINode*> leaves_;
+
+    // Sparse accumulator for query(Ball, ...): sums each seer's ball fractions.
+    // Node ids are dense (0 .. num_nodes_-1), so accum_ is indexed directly by id.
+    // INVARIANT: accum_ is all zeros between queries -- a query resets only the entries
+    // listed in touched_, keeping its cost proportional to the seers actually hit.
+    std::vector<double> accum_;      // accum_[id] = ball fraction accumulated for that node
+    std::vector<VINode*> touched_;   // the nodes with a currently-nonzero accum_ entry
 
 
 
@@ -367,7 +454,6 @@ private:
 
     
     bool buildTreeRecursive(VINode* node, const BoundingBox& env_bounds, const std::string& idx, int& node_counter, int& leaf_counter) {
-        num_nodes_++;
         
         // Calculate size early for logging
         Eigen::Vector3d box_size = getBoxSize(node->box);
@@ -849,9 +935,6 @@ private:
     double getBallFraction(const BoundingBox& b, const Ball& ball) {
         return getIntersectionVolume(b, ball) / getBallVolume(ball);
     }
-
-    // Helper map for ID lookup
-    std::unordered_map<int, VINode*> all_nodes_map_;
 
 };
 
