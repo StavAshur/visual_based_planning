@@ -1,9 +1,10 @@
 #include <ros/ros.h>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <angles/angles.h>
+#include <stdexcept>
 
 // Include your headers
-#include "visual_based_planning/VisualPlanner.h"
+#include "visual_based_planning/planners/PlannerFactory.h"
 #include "visual_based_planning/PlanVisibilityPath.h"
 #include <trajectory_msgs/JointTrajectory.h>
 #include <trajectory_msgs/JointTrajectoryPoint.h>
@@ -15,36 +16,56 @@ private:
     ros::NodeHandle pnh_; // Private Namespace ("~")
     ros::ServiceServer service_;
     planning_scene_monitor::PlanningSceneMonitorPtr psm_;
-    std::shared_ptr<visual_planner::VisualPlanner> planner_;
+    /// The shared world. Outlives individual planners so that swapping algorithms does
+    /// not rebuild the visibility structures.
+    std::shared_ptr<visual_planner::PlanningContext> ctx_;
+    std::unique_ptr<visual_planner::VisibilityPlannerBase> planner_;
 
     // State tracking to detect changes
     bool params_changed_;
+    /// Set when a parameter changed that is baked into the planner object itself
+    /// (its type, or a value passed at construction), so it must be rebuilt.
+    bool planner_dirty_;
     bool use_visual_ik_;
     bool use_visibility_integrity_;
     bool use_visibility_roadmap_;
     bool current_shortcutting_;
     std::string current_mode_;
+    /// The mode the live planner_ was actually constructed for. Distinct from
+    /// current_mode_ because a request may override the mode for one call.
+    std::string built_mode_;
+
+    // Planner-owned config, retained so a rebuilt planner can be configured identically.
+    visual_planner::RRTParams rrt_params_;
+    visual_planner::PRMParams prm_params_;
+    int time_cap_;
 
 public:
-    VisualPlanningNode(planning_scene_monitor::PlanningSceneMonitorPtr psm) 
-        : psm_(psm), pnh_("~"), params_changed_(false)
+    VisualPlanningNode(planning_scene_monitor::PlanningSceneMonitorPtr psm)
+        : psm_(psm), pnh_("~"), params_changed_(false), planner_dirty_(false)
     {
         ROS_WARN("Initializing Planning Service");
         planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
         planning_scene::PlanningScenePtr scene_ptr = ls->diff();
 
-        planner_ = std::make_shared<visual_planner::VisualPlanner>(scene_ptr);
+        ctx_ = std::make_shared<visual_planner::PlanningContext>(scene_ptr);
 
         // Initialize current state trackers with defaults (or what was just loaded)
-        // We assume defaults match the VisualPlanner constructor defaults
         use_visual_ik_ = false;
         use_visibility_integrity_ = false;
         use_visibility_roadmap_ = false;
         current_shortcutting_ = true;
+        time_cap_ = 60;
 
-        // Load static config (Bounds, Resolution, etc.)
+        // Load static config (Bounds, Resolution, etc.) into the context and into the
+        // retained planner config, then build the planner named by planner/mode.
         loadStaticConfig();
-        
+        if (!rebuildPlanner(scene_ptr, current_mode_)) {
+            ROS_FATAL("planner/mode '%s' names no known planner. Refusing to start.",
+                      current_mode_.c_str());
+            throw std::runtime_error("unknown planner mode: " + current_mode_);
+        }
+
 
         service_ = nh_.advertiseService("plan_visibility_path", &VisualPlanningNode::planCallback, this);
         ROS_WARN("Visual Planning Service Ready");
@@ -55,7 +76,7 @@ public:
 
         double resolution;
         pnh_.param<double>("planner/resolution", resolution, 0.05);
-        planner_->setResolution(resolution);
+        ctx_->setResolution(resolution);
 
         visual_planner::BoundingBox bounds;
         pnh_.param("planner/workspace_bounds/x_min", bounds.x_min, -2.0);
@@ -64,31 +85,31 @@ public:
         pnh_.param("planner/workspace_bounds/y_max", bounds.y_max, 2.0);
         pnh_.param("planner/workspace_bounds/z_min", bounds.z_min, -0.5);
         pnh_.param("planner/workspace_bounds/z_max", bounds.z_max, 3.5);
-        planner_->setWorkspaceBounds(bounds);
+        ctx_->setWorkspaceBounds(bounds);
 
         double visibility_threshold;
         pnh_.param<double>("planner/visibility_threshold", visibility_threshold, 0.75);
-        planner_->setVisibilityThreshold(visibility_threshold);
+        ctx_->setVisibilityThreshold(visibility_threshold);
 
         bool use_visual_ik;
         pnh_.param("planner/use_visual_ik", use_visual_ik_, true);
-        planner_->setUseVisualIK(use_visual_ik_);
+        // retained; applied at planner construction
 
         std::string group_name;
         // pnh_.param<std::string>("planner/group_name", group_name, "manipulator");
         pnh_.param<std::string>("planner/group_name", group_name, "whole_robot");
-        planner_->setGroupName(group_name);
+        ctx_->setGroupName(group_name);
 
         std::string ee_link;
         pnh_.param<std::string>("planner/ee_link_name", ee_link, "tool0");
-        planner_->setEELinkName(ee_link);
+        ctx_->setEELinkName(ee_link);
 
 
         visual_planner::RRTParams rrt; 
         pnh_.param("planner/rrt/goal_bias", rrt.goal_bias, 0.1);
         pnh_.param("planner/rrt/max_extension", rrt.max_extension, 0.5);
         pnh_.param("planner/rrt/max_iterations", rrt.max_iterations, 100000);
-        planner_->setRRTParams(rrt);
+        rrt_params_ = rrt;
 
         visual_planner::PRMParams prm;
         pnh_.param("planner/prm/num_neighbors", prm.num_neighbors, 10);
@@ -99,27 +120,27 @@ public:
         pnh_.param("planner/prm/max_size", prm.max_size, 10000);
         pnh_.param("planner/prm/max_goals", prm.max_goals, 10);
 
-        planner_->setPRMParams(prm);
+        prm_params_ = prm;
 
         visual_planner::VisibilityToolParams vt_params; // Initialized with defaults from Types.h
         pnh_.param("planner/visibility_tool_params/beam_angle", vt_params.beam_angle, vt_params.beam_angle);
         pnh_.param("planner/visibility_tool_params/beam_length", vt_params.beam_length, vt_params.beam_length);
         
         // Pass to planner
-        planner_->setVisibilityToolParams(vt_params);
+        ctx_->setVisibilityToolParams(vt_params);
 
         // Load Time Cap
         int time_cap;
         pnh_.param("planner/time_cap", time_cap, 60); // Default to 120 if missing
-        planner_->setTimeCap(time_cap);
+        time_cap_ = time_cap;
 
         bool use_visibility_integrity;
         pnh_.param("planner/use_visibility_integrity", use_visibility_integrity_, true);
-        planner_->setUseVisibilityIntegrity(use_visibility_integrity_);
+        ctx_->setUseVisibilityStructure(use_visibility_integrity_);
 
         bool use_visibility_roadmap;
         pnh_.param("planner/use_visibility_roadmap", use_visibility_roadmap_, false);
-        planner_->setUseVisibilityRoadmap(use_visibility_roadmap_);
+        ctx_->setUseVisibilityRoadmap(use_visibility_roadmap_);
 
         visual_planner::VisibilityIntegrityParams vi_params; // Initialized with defaults from Types.h
         pnh_.param("planner/visibility_integrity_params/num_samples", vi_params.num_samples, vi_params.num_samples);
@@ -127,7 +148,40 @@ public:
         pnh_.param("planner/visibility_integrity_params/k_neighbors", vi_params.k_neighbors, vi_params.k_neighbors);
         
         // Pass to planner
-        planner_->setVisibilityIntegrityParams(vi_params);
+        ctx_->setVisibilityIntegrityParams(vi_params);
+    }
+
+    /**
+     * @brief Constructs the planner for `mode` on the shared context.
+     *
+     * Cheap: the context, and with it the visibility structures, is reused. Only the
+     * per-run state is discarded, so switching algorithms or reacting to a changed
+     * construction-time parameter costs one allocation rather than a VI-tree rebuild.
+     *
+     * @return false if `mode` names no known planner. The caller is expected to fail
+     *         rather than continue: silently planning with the wrong algorithm would
+     *         make a typo in planner/mode look like a working run.
+     */
+    bool rebuildPlanner(const planning_scene::PlanningScenePtr& scene, const std::string& mode) {
+        visual_planner::PlannerOptions opts;
+        opts.use_visual_ik = use_visual_ik_;
+        opts.use_visibility_integrity = use_visibility_integrity_;
+        opts.shortcutting = current_shortcutting_;
+        opts.time_cap = time_cap_;
+        opts.rrt = rrt_params_;
+        opts.prm = prm_params_;
+
+        auto fresh = visual_planner::createPlanner(mode, ctx_, opts);
+        if (!fresh) return false;
+
+        planner_ = std::move(fresh);
+        // A new planner's nearest-neighbour index has no scene, and would silently
+        // return no neighbours at all until given one.
+        planner_->attachScene(scene);
+        built_mode_ = mode;
+        planner_dirty_ = false;
+        ROS_WARN("Planner built for mode: %s", mode.c_str());
+        return true;
     }
 
     // Helper to reload parameters and detect changes
@@ -142,7 +196,8 @@ public:
         }
 
         if (new_vis_ik != use_visual_ik_) {
-            planner_->setUseVisualIK(new_vis_ik);
+            // Passed at construction, so the planner has to be rebuilt to pick it up.
+            planner_dirty_ = true;
             use_visual_ik_ = new_vis_ik;
             changed_this_cycle = true;
             ROS_INFO("Param Changed: use_visual_ik -> %s", new_vis_ik ? "TRUE" : "FALSE");
@@ -210,79 +265,60 @@ public:
         // 1. Check for param updates
         updatePlannerParams();
 
-        planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
+        // 2. Determine Mode. The request overrides the parameter server for this call
+        // only, so the mode is resolved before the planner is chosen.
+        std::string mode = current_mode_;
+        if (!req.planner_type.empty()) {
+             mode = req.planner_type;
+        }
 
-        // 2. Modified IF statement: Update scene if not initialized OR params changed
-        if (!planner_->isInitialized() || params_changed_) {
-            
-            ROS_WARN("Planner Re-Initialization Triggered (Init: %d, ParamsChanged: %d)", 
-                     planner_->isInitialized(), params_changed_);
+        planning_scene_monitor::LockedPlanningSceneRO ls(psm_);
+        planning_scene::PlanningScenePtr fresh_scene;
+
+        // 3. Rebuild the shared context if it is stale. This is the expensive path: it
+        // re-extracts obstacles and rebuilds the visibility structure.
+        if (!ctx_->isInitialized() || params_changed_) {
+
+            ROS_WARN("Context Re-Initialization Triggered (Init: %d, ParamsChanged: %d)",
+                     ctx_->isInitialized(), params_changed_);
 
             planner_->reset();
 
-            // Get fresh snapshot
-            planning_scene::PlanningScenePtr fresh_scene = ls->diff();
-            
-            // This usually rebuilds the visibility oracle/obstacles
-            planner_->setPlanningScene(fresh_scene);
+            fresh_scene = ls->diff();
+            ctx_->setPlanningScene(fresh_scene);
+            planner_->attachScene(fresh_scene);
 
-            // Reset the flag now that we've handled the change
             params_changed_ = false;
         }
 
-        // 3. Pass Targets
+        // 4. Swap the planner if the requested mode differs from the one we built, or
+        // if a construction-time parameter changed. The context is untouched.
+        if (planner_dirty_ || mode != built_mode_) {
+            if (!fresh_scene) fresh_scene = ls->diff();
+            if (!rebuildPlanner(fresh_scene, mode)) {
+                ROS_ERROR("Requested planner '%s' is unknown; failing this request.",
+                          mode.c_str());
+                res.success = false;
+                return true;
+            }
+        }
+
+        // 5. Pass Targets. Done after any rebuild -- the target and start configuration
+        // are per-run state and would not survive one.
         planner_->computeTargetMES(req.task.target_points);
 
         if (!req.task.start_joints.empty()) {
             planner_->setStartJoints(req.task.start_joints);
         } else {
             std::vector<double> current_joints;
-            std::string group = planner_->getGroupName(); 
+            std::string group = planner_->getGroupName();
             ls->getCurrentState().copyJointGroupPositions(group, current_joints);
             planner_->setStartJoints(current_joints);
         }
 
-        // 4. Determine Mode (Global Param)
-        std::string mode = current_mode_; // Default to what we read from config/param server
-        
-        // If client overrides it in the request, use that
-        if (!req.planner_type.empty()) {
-             mode = req.planner_type;
-        }
-
         ROS_WARN("Executing Planner with Mode: %s", mode.c_str());
 
-        bool success = false;
-        if (mode.find("PRM") != std::string::npos) {
-//            visual_planner::Sampler& sampler = planner_->getSampler();
-//            visual_planner::ValidityChecker& validity_checker = planner_->getValidityChecker() ;
-//            std::vector<double> start;
-//            bool found_random_start = false;
-
-//            while (!found_random_start) {
-//                start = sampler.sampleUniform();
-//                found_random_start = validity_checker.isValid(start);
-//                // Specifically for the experiments in the double room env
-//                found_random_start = !((start[0] > 0) && (start[0] < 2.25) && (start[1] < 2.25) && (start[1] > -2.25));
-//          	ROS_INFO(             
-//			"New goal configuration is (%.2f, %.2f, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg, %.2f deg)",
-//			start[0],
-//			start[1],
-//			angles::to_degrees(start[2]),
-//			angles::to_degrees(start[3]),
-//			angles::to_degrees(start[4]),
-//			angles::to_degrees(start[5]),
-//			angles::to_degrees(start[6]),
-//			angles::to_degrees(start[7]),
-//			angles::to_degrees(start[8])
-//		); 
-//		} 
-
-            //success = planner_->planVisPRM(start);
-            success = planner_->planVisPRM();
-        } else {
-            success = planner_->planVisRRT();
-        }
+        bool success = planner_->plan();
 
         res.success = success;
         
